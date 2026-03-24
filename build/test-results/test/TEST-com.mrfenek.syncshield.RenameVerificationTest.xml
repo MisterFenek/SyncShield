@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mrfenek.syncshield.RenameVerificationTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-03-24T09:49:40" hostname="DESKTOP-A1E3F33" time="0.021">
+  <properties/>
+  <testcase name="pluginMetadataUsesSyncShield()" classname="com.mrfenek.syncshield.RenameVerificationTest" time="0.005"/>
+  <testcase name="resourcesDoNotReferenceLegacyNames()" classname="com.mrfenek.syncshield.RenameVerificationTest" time="0.014"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
