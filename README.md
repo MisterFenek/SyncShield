@@ -1,3 +1,5 @@
+![Plugin banner](https://cdn.modrinth.com/data/cached_images/ba73569c8d389a375931a17eb87a688333e1ea28.png)
+
 **Overview**  
 SyncShield adds 2FA verification to Minecraft logins via Telegram and/or Discord, blocks unverified joins, and lets admins approve logins via interactive buttons. Both Telegram and Discord bots are completely modular and optional — you can use **Telegram only**, **Discord only**, or **both simultaneously**. It also provides Telegram & Discord ↔ Minecraft chat sync, cross-platform ticket and report systems, and 3D image rendering of inventories, items, ender chests, written books, and advancements using the **Monocraft** pixel font with full Russian/English localization.
 
