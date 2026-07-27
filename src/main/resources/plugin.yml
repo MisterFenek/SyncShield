@@ -1,5 +1,5 @@
 name: "SyncShield"
-version: '1.3.1'
+version: '1.4.0'
 main: com.mrfenek.syncshield.SyncShield
 api-version: '1.16'
 prefix: SyncShield
@@ -21,3 +21,9 @@ commands:
     description: Main command for SyncShield (2FA & Telegram chat sync)
     usage: /syncshield <link|settings|config|reload|debug>
     aliases: [ss]
+  ticket:
+    description: Create a support ticket
+    usage: /ticket <message>
+  report:
+    description: Report a player
+    usage: /report <player> <reason>

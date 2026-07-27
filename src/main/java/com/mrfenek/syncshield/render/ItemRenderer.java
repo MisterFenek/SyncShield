@@ -3,33 +3,95 @@ package com.mrfenek.syncshield.render;
 import org.bukkit.ChatColor;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.meta.Damageable;
 
 import javax.imageio.ImageIO;
 import java.awt.Color;
+import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * Item card renderer, ported from the Kotlin reference.
+ * Item card renderer using Monocraft as the exclusive font with full RU/EN localization support.
  */
 public final class ItemRenderer {
-    private static final int WIDTH = 250;
+    private static final int WIDTH = 280;
     private static final int IMAGE_SCALE = 48;
     private static final int MARGIN = 12;
     private static final Color BACKGROUND_COLOR = Color.decode("#210939");
     private static final Color BORDER_COLOR = Color.decode("#1A0B1A");
     private static final Color ENCHANTMENT_COLOR = Color.decode("#A7A7A7");
+    private static final Color LORE_COLOR = Color.decode("#AAAAAA");
+
+    private static final Font FONT_NAME = MinecraftFontLoader.getFont(16f);
+    private static final Font FONT_ENCHANT = MinecraftFontLoader.getFont(13f);
+    private static final Font FONT_LORE = MinecraftFontLoader.getFont(12f);
+    private static final Font FONT_STAT = MinecraftFontLoader.getFont(13f);
+    private static final Font FONT_COUNT = MinecraftFontLoader.getFont(20f);
+
+    private static final Map<String, String> ENCHANTMENT_RU = new HashMap<>();
+    static {
+        ENCHANTMENT_RU.put("sharpness", "Острота");
+        ENCHANTMENT_RU.put("smite", "Небесная кара");
+        ENCHANTMENT_RU.put("bane_of_arthropods", "Бич членистоногих");
+        ENCHANTMENT_RU.put("knockback", "Отбрасывание");
+        ENCHANTMENT_RU.put("fire_aspect", "Заговор огня");
+        ENCHANTMENT_RU.put("looting", "Добыча");
+        ENCHANTMENT_RU.put("sweeping_edge", "Разящий клинок");
+        ENCHANTMENT_RU.put("efficiency", "Эффективность");
+        ENCHANTMENT_RU.put("silk_touch", "Шелковое касание");
+        ENCHANTMENT_RU.put("unbreaking", "Прочность");
+        ENCHANTMENT_RU.put("fortune", "Удача");
+        ENCHANTMENT_RU.put("power", "Сила");
+        ENCHANTMENT_RU.put("punch", "Откидывание");
+        ENCHANTMENT_RU.put("flame", "Горящая стрела");
+        ENCHANTMENT_RU.put("infinity", "Бесконечность");
+        ENCHANTMENT_RU.put("luck_of_the_sea", "Морская удача");
+        ENCHANTMENT_RU.put("lure", "Приманка");
+        ENCHANTMENT_RU.put("loyalty", "Верность");
+        ENCHANTMENT_RU.put("impaling", "Пронзание");
+        ENCHANTMENT_RU.put("riptide", "Тягун");
+        ENCHANTMENT_RU.put("channeling", "Громовержец");
+        ENCHANTMENT_RU.put("multishot", "Залп");
+        ENCHANTMENT_RU.put("quick_charge", "Быстрая перезарядка");
+        ENCHANTMENT_RU.put("piercing", "Пронизывающая стрела");
+        ENCHANTMENT_RU.put("mending", "Починка");
+        ENCHANTMENT_RU.put("vanishing_curse", "Проклятие утраты");
+        ENCHANTMENT_RU.put("binding_curse", "Проклятие несъемности");
+        ENCHANTMENT_RU.put("protection", "Защита");
+        ENCHANTMENT_RU.put("fire_protection", "Огнеупорность");
+        ENCHANTMENT_RU.put("feather_falling", "Невесомость");
+        ENCHANTMENT_RU.put("blast_protection", "Взрывоустойчивость");
+        ENCHANTMENT_RU.put("projectile_protection", "Защита от снарядов");
+        ENCHANTMENT_RU.put("respiration", "Подводное дыхание");
+        ENCHANTMENT_RU.put("aqua_affinity", "Подводник");
+        ENCHANTMENT_RU.put("thorns", "Шипы");
+        ENCHANTMENT_RU.put("depth_strider", "Подводная ходьба");
+        ENCHANTMENT_RU.put("frost_walker", "Быстрый шаг");
+        ENCHANTMENT_RU.put("soul_speed", "Скорость души");
+        ENCHANTMENT_RU.put("swift_sneak", "Проворство");
+    }
+
+    private static boolean isRussian = false;
+    private static String durabilityFormat = "Durability: %current%/%max%";
+
+    public static void setLanguage(String lang, String durabilityFmt) {
+        isRussian = "ru".equalsIgnoreCase(lang);
+        if (durabilityFmt != null && !durabilityFmt.isEmpty()) {
+            durabilityFormat = durabilityFmt;
+        }
+    }
 
     public ItemRenderResult renderItem(ItemStack item) {
         if (item == null || item.getType() == null || item.getType().name().equalsIgnoreCase("AIR")) {
-            return new ItemRenderResult(new byte[0], "Air");
+            return new ItemRenderResult(new byte[0], isRussian ? "Воздух" : "Air");
         }
         BufferedImage texture = loadTexture(item);
         int height = calculateDynamicHeight(item);
@@ -40,8 +102,9 @@ public final class ItemRenderer {
         drawTexture(g, texture);
         String itemName = drawItemName(g, item);
 
-        int textYOffset = IMAGE_SCALE + MARGIN + 50;
+        int textYOffset = IMAGE_SCALE + MARGIN + 28;
         textYOffset = drawEnchantments(g, item, textYOffset);
+        textYOffset = drawLore(g, item, textYOffset);
         drawDurability(g, item, textYOffset);
         drawStackSize(g, item);
 
@@ -71,7 +134,11 @@ public final class ItemRenderer {
         int height = IMAGE_SCALE + MARGIN * 2 + 30;
         Map<Enchantment, Integer> enchantments = getEnchantments(item);
         if (!enchantments.isEmpty()) {
-            height += 20 * enchantments.size();
+            height += 18 * enchantments.size();
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null && meta.hasLore() && meta.getLore() != null) {
+            height += 16 * meta.getLore().size();
         }
         if (item.getType().getMaxDurability() > 0) {
             height += 20;
@@ -102,16 +169,18 @@ public final class ItemRenderer {
             displayName = ChatColor.stripColor(meta.getDisplayName());
         }
         String fullName = getItemName(item, displayName);
-        g.setFont(MinecraftFontLoader.getFont(16f));
+        g.setFont(FONT_NAME);
         g.setColor(determineNameColor(item));
-        g.drawString(fullName, MARGIN, IMAGE_SCALE + MARGIN + 30);
+        g.drawString(fullName, MARGIN, IMAGE_SCALE + MARGIN + 22);
         return fullName;
     }
 
     private String getItemName(ItemStack item, String displayName) {
+        if (displayName != null && !displayName.isEmpty()) {
+            return displayName;
+        }
         String itemTypeName = item.getType().name().replace('_', ' ').toLowerCase(Locale.ROOT);
-        itemTypeName = itemTypeName.substring(0, 1).toUpperCase(Locale.ROOT) + itemTypeName.substring(1);
-        return displayName != null && !displayName.isEmpty() ? displayName : itemTypeName;
+        return itemTypeName.substring(0, 1).toUpperCase(Locale.ROOT) + itemTypeName.substring(1);
     }
 
     private Color determineNameColor(ItemStack item) {
@@ -127,12 +196,29 @@ public final class ItemRenderer {
     private int drawEnchantments(Graphics2D g, ItemStack item, int textYOffset) {
         Map<Enchantment, Integer> enchantments = getEnchantments(item);
         if (enchantments.isEmpty()) return textYOffset;
-        g.setFont(MinecraftFontLoader.getFont(14f));
+        g.setFont(FONT_ENCHANT);
         g.setColor(ENCHANTMENT_COLOR);
         int currentYOffset = textYOffset;
         for (Map.Entry<Enchantment, Integer> entry : enchantments.entrySet()) {
-            g.drawString(formatEnchantmentName(entry.getKey()) + " " + entry.getValue(), MARGIN, currentYOffset);
-            currentYOffset += 20;
+            String enchText = formatEnchantmentName(entry.getKey()) + " " + toRoman(entry.getValue());
+            g.drawString(enchText, MARGIN, currentYOffset);
+            currentYOffset += 18;
+        }
+        return currentYOffset;
+    }
+
+    private int drawLore(Graphics2D g, ItemStack item, int textYOffset) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null || !meta.hasLore() || meta.getLore() == null) return textYOffset;
+        g.setFont(FONT_LORE);
+        g.setColor(LORE_COLOR);
+        int currentYOffset = textYOffset;
+        for (String line : meta.getLore()) {
+            String cleanLine = ChatColor.stripColor(line);
+            if (!cleanLine.trim().isEmpty()) {
+                g.drawString(cleanLine, MARGIN, currentYOffset);
+                currentYOffset += 16;
+            }
         }
         return currentYOffset;
     }
@@ -142,14 +228,15 @@ public final class ItemRenderer {
         Damageable dmg = (Damageable) item.getItemMeta();
         int max = item.getType().getMaxDurability();
         int current = max - dmg.getDamage();
-        g.setFont(MinecraftFontLoader.getFont(14f));
+        g.setFont(FONT_STAT);
         g.setColor(Color.WHITE);
-        g.drawString("Durability: " + current + "/" + max, MARGIN, textYOffset);
+        String text = durabilityFormat.replace("%current%", String.valueOf(current)).replace("%max%", String.valueOf(max));
+        g.drawString(text, MARGIN, textYOffset);
     }
 
     private void drawStackSize(Graphics2D g, ItemStack item) {
         if (item.getAmount() > 1) {
-            g.setFont(MinecraftFontLoader.getFont(20f));
+            g.setFont(FONT_COUNT);
             g.setColor(Color.WHITE);
             String stackSize = "x " + item.getAmount();
             int x = MARGIN + IMAGE_SCALE + 10;
@@ -167,14 +254,41 @@ public final class ItemRenderer {
     }
 
     private String formatEnchantmentName(Enchantment enchantment) {
+        String key = null;
         try {
             Object keyObj = enchantment.getClass().getMethod("getKey").invoke(enchantment);
             if (keyObj != null) {
-                Object key = keyObj.getClass().getMethod("getKey").invoke(keyObj);
-                if (key != null) return key.toString().replace('_', ' ');
+                Object k = keyObj.getClass().getMethod("getKey").invoke(keyObj);
+                if (k != null) key = k.toString().toLowerCase(Locale.ROOT);
             }
         } catch (Exception ignored) {}
-        return enchantment.getName().replace('_', ' ');
+
+        if (key == null) {
+            key = enchantment.getName().toLowerCase(Locale.ROOT);
+        }
+
+        if (isRussian && ENCHANTMENT_RU.containsKey(key)) {
+            return ENCHANTMENT_RU.get(key);
+        }
+
+        String fallback = key.replace('_', ' ');
+        return fallback.substring(0, 1).toUpperCase(Locale.ROOT) + fallback.substring(1);
+    }
+
+    private String toRoman(int level) {
+        switch (level) {
+            case 1: return "I";
+            case 2: return "II";
+            case 3: return "III";
+            case 4: return "IV";
+            case 5: return "V";
+            case 6: return "VI";
+            case 7: return "VII";
+            case 8: return "VIII";
+            case 9: return "IX";
+            case 10: return "X";
+            default: return String.valueOf(level);
+        }
     }
 
     public static final class ItemRenderResult {

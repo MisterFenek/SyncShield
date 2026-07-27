@@ -1,24 +1,28 @@
 **Overview**  
-SyncShield adds Telegram‑based 2FA to Minecraft logins, blocks unverified joins, and lets admins approve logins via inline buttons. It also provides Telegram ↔ Minecraft chat sync and can render inventories, items, and ender chests as images in Telegram.
+SyncShield adds 2FA verification to Minecraft logins via Telegram and/or Discord, blocks unverified joins, and lets admins approve logins via interactive buttons. Both Telegram and Discord bots are completely modular and optional — you can use **Telegram only**, **Discord only**, or **both simultaneously**. It also provides Telegram & Discord ↔ Minecraft chat sync, cross-platform ticket and report systems, and can render inventories, items, and ender chests as images in Telegram.
 
 **Advantages**  
+- Symmetrical & Modular configuration for both Telegram and Discord integrations.  
 - Strong 2FA for OPs and optionally for linked non‑OP players.  
-- Security modes: `always`, `session`, `whitelist`, `disabled`.  
-- Session expiry control in hours.  
+- Simple & Compact **6-character verification codes** (`A3F9X2`) for instant account linking.  
+- Case-insensitive code entry (`a3f9x2` or `A3F9X2`) via `/mclink <code>`, `/start <code>`, or direct message.  
 - IP approval + blacklist management.  
 - Admin notifications for joins/quits, commands, and security events.  
-- Optional Telegram RCON with allowlisted commands.  
+- Telegram and Discord RCON with allowlisted commands.  
+- Cross-platform **Ticket & Report system** with direct Admin reply forwarding, `/ticket chat <msg>` support, and `/close` execution.  
+- Minecraft in-game color code translation (`&a`, `&c`, `&e`, etc.).  
 - Private‑only bot mode for security.  
 - English/Russian message packs with safe reload.  
-- Inventory/item/ender chest rendering in Telegram.
+- Inventory/item/ender chest rendering in Telegram and Discord. (Credits to [paper-telegram-bridge](https://modrinth.com/plugin/paper-telegram-bridge) for background images)
 
 **Quick Setup**  
-1. Create a Telegram bot with `@BotFather` and copy the token.  
-2. Get your Telegram user ID (owner) and optional admin IDs.  
-3. Put the plugin in the `plugins` folder and start the server once.  
-4. Edit `config.yml` with token and IDs, then run `/syncshield reload`.  
-5. In‑game, run `/syncshield link` to pair your Minecraft account.  
-6. Approve logins from Telegram when prompted.
+1. Create a Telegram bot with `@BotFather` and copy the token.
+2. (Optional) Create a Discord bot via the Developer Portal and copy the token.
+3. Get your Telegram user ID (owner) and optional admin IDs.  
+4. Put the plugin in the `plugins` folder and start the server once.  
+5. Edit `config.yml` with tokens and IDs, then run `/syncshield reload`.  
+6. In‑game, run `/syncshield link` to pair your Minecraft account.  
+7. Approve logins from Telegram when prompted.
 
 <details>
 <summary>Commands</summary>
@@ -39,6 +43,12 @@ SyncShield adds Telegram‑based 2FA to Minecraft logins, blocks unverified join
 
 - `/syncshield debug rebake-textures`  
   Forces a fresh block/item texture bake. Requires `syncshield.debug`.
+
+- `/ticket <message>`
+  Opens a ticket with administrators. Syncs to Telegram and Discord.
+
+- `/report <player> <reason>`
+  Reports a player to administrators. Syncs to Telegram and Discord.
 
 **Aliases**
 
@@ -67,135 +77,114 @@ SyncShield adds Telegram‑based 2FA to Minecraft logins, blocks unverified join
 - `/<command>`  
   Any `/...` command is also sent to console as RCON (admins only, when `rcon-enabled: true` and allowlisted).
 
+**Discord Commands**
+
+- `/rcon <command>`  
+  Runs a console command on the server (Requires a role configured in `discord-admin-roles`).
+
 </details>
 
 <details>
 <summary>Config Example</summary>
   
 ```yaml
+# =========================================================
 # SyncShield Configuration File
 # ---------------------------------------------------------
-# This plugin provides 2FA security and Telegram chat sync for Minecraft.
-# It protects OP accounts, supports command feedback, and can notify admins about server events.
 # Supported server versions: 1.16.X - 1.21.X (Paper/Spigot API).
+# =========================================================
 
-# Telegram Bot Token (REQUIRED)
-# You can get this by chatting with @BotFather on Telegram.
-# Use the /newbot command and follow instructions.
-# After editing, run /syncshield reload or restart the server.
-bot-token: "YOUR_BOT_TOKEN_HERE"
-
-# Telegram Owner ID (Superuser, overrides all)
-# This ID has full access to the bot regardless of permissions.
-# You can get your ID from @userinfobot or similar bots.
-# Use a single numeric ID, not a username.
-owner-id: 0
-
-# Telegram Admin IDs for monitoring and RCON access
-# List of IDs that can manage the bot and receive notifications.
-# Example: admin-ids: [123456789, 987654321]
-# You can leave it empty and use only owner-id.
-admin-ids: []
+# =========================================================
+# ⚙️ PLUGIN CONFIG (General Settings)
+# =========================================================
 
 # Default Language for the plugin
-# Supported languages: en (English), ru (Russian)
-# This will determine which messages_*.yml file to use.
-# Changing this will replace messages.yml with the selected language template.
 language: en
 
 # 2FA mode for Operators (OPs): always, session, whitelist, disabled
-# always: Approval is required for every login attempt (highest security).
-# session: Approval is remembered for the duration of session-expiry-hours.
-# whitelist: Approval is permanent for the IP address until manual removal.
-# disabled: 2FA is disabled for OPs by default (not recommended).
 op-2fa-mode: session
 
 # 2FA mode for non-OP players who have linked their account: always, session, whitelist, disabled
-# This applies to regular players who use /syncshield link.
-# Default: disabled
-# Recommendation: keep disabled unless you need 2FA for everyone.
 non-op-2fa-mode: disabled
 
 # Session expiry in hours (only for 'session' mode)
-# After this period, the player must re-approve their login from Telegram.
-# Shorter values are more secure but less convenient.
 session-expiry-hours: 12
 
-# Enable RCON access via Telegram for admins
-# If true, admins can run console commands directly from the bot.
-# This is powerful; restrict admin-ids and keep bot-token private.
-rcon-enabled: true
-
-# Restrict bot to private chats only (Highly recommended for security)
-# If true, the bot will ignore any commands or messages from group chats.
-# Set to false only if you use chat sync in groups.
-private-only: true
-
-# Enable debug outputs in the console
-# Use this only for troubleshooting; it can generate a lot of log output.
-# Debug logs never show your bot-token.
-debug: false
-
-# Data storage encryption
-# Data is stored in syncshield_data.db (SQLite). When encryption is enabled,
-# the plugin generates a random 16-digit key on first launch and stores it
-# in syncshield_data.key. If this key is lost, data cannot be recovered.
-# You cannot change the key after first launch.
+# Data storage encryption (SQLite)
 data-encryption: true
 
-# Telegram <-> Minecraft chat sync
-# Add chat IDs where you want chat sync to happen (group or private).
-# Make sure the bot is added to the chat and has permission to read messages.
+# Enable debug outputs in the console
+debug: false
+
+# Master switch for Minecraft Ticket & Report System
+ticket-system-enabled: true
+
+# Block item baking (for accurate 3D block item renders in Telegram)
+bake-block-items-on-startup: true
+bake-block-items-log-progress: true
+
+
+# =========================================================
+# ✈️ TELEGRAM CONFIG (Bot & Sync Settings)
+# =========================================================
+
+bot-token: "YOUR_BOT_TOKEN_HERE"
+owner-id: 0
+admin-ids: []
+private-only: true
+rcon-enabled: true
+
+# Telegram <-> Minecraft Chat Sync
 chat-sync-enabled: false
-# List of Telegram chat IDs that will receive/forward chat.
-# Example: ["123456789", "-1009876543210"]
 chat-sync-chat-ids: []
-# Optional: map chat IDs to topic IDs for supergroups.
-# Format: ["-1001234567890:42", "-1009876543210:7"]
-# If a chat ID has a topic mapping, messages will be sent to that topic.
 chat-sync-topics: []
-# Enable/disable MC -> Telegram chat sync for plain chat messages.
-# If disabled, only special tags like [inv]/[item] will be processed.
-# This does not affect Telegram -> Minecraft sync.
 chat-sync-chat-enabled: true
-# Enable/disable MC -> Telegram join/leave messages.
-# Use this if you want chat sync but no system join/leave spam.
 chat-sync-join-leave-enabled: true
-# Enable/disable MC -> Telegram death messages.
-# Death messages are pulled from Minecraft and sent to Telegram.
 chat-sync-death-enabled: true
-# Forward Minecraft chat to Telegram.
-# Turn this off if you only want Telegram -> Minecraft.
-# Requires chat-sync-enabled to be true.
 chat-sync-from-mc: true
-# Forward Telegram chat to Minecraft.
-# Turn this off if you only want Minecraft -> Telegram.
-# Requires chat-sync-enabled to be true.
 chat-sync-from-tg: true
-# Enable [inv] and [ender] rendering.
-# If disabled, [inv] and [ender] tags are ignored.
 chat-sync-render-inventory: true
-# Enable [ender] rendering.
-# If disabled, [ender] tags are ignored even if inventory rendering is on.
 chat-sync-render-ender: true
-# Enable [item] rendering.
-# If disabled, [item] tags are ignored.
 chat-sync-render-items: true
-# Enable book rendering when holding a written book and using [item].
-# If disabled, books will be sent as text only.
 chat-sync-render-books: true
-# Enable advancement rendering.
-# If disabled, advancement images are not sent.
 chat-sync-render-advancements: true
 
-# Block item baking (for accurate 3D block item renders)
-# If enabled, the plugin will download official assets and bake item renders on first startup per version.
-# This can cause CPU spikes and short lag during the first bake.
-# The baked cache is stored under plugins/SyncShield/cache/
-bake-block-items-on-startup: true
-# Log progress while baking block items.
-# Disable if you want a quieter console during the bake.
-bake-block-items-log-progress: true
+# Telegram Ticket Notifications (Chat or Topic ID)
+ticket-telegram-chat-id: 0
+ticket-telegram-topic-id: 0
+
+
+# =========================================================
+# 👾 DISCORD CONFIG (Bot & Sync Settings)
+# =========================================================
+
+discord-enabled: false
+discord-bot-token: "YOUR_DISCORD_BOT_TOKEN_HERE"
+discord-admin-roles: []
+discord-chat-sync-channel: 0
+discord-ticket-channel: 0
 ```
+
+</details>
+
+
+<details>
+<summary>Roadmap</summary>
+
+| Status | Feature | Key Task |
+| :---: | :--- | :--- |
+| ❌ (Planned for 1.7/1.8) | **Multi-Loader Support** | Support Quilt, Fabric, Forge, and NeoForge |
+| ✅ | **Ticket/report system** | Implement a ticket/report system in Minecraft, Telegram & Discord |
+| ✅ | **Legacy Support** | Port logic to older Minecraft versions |
+| ✅ | **Telegram RCON Feedback** | Add command feedback to Telegram RCON |
+| ✅ | **Chat Sync (Telegram)** | Integrate Telegram <-> Minecraft chat |
+| ✅ | **Discord 2FA** | Add Discord login approval functions |
+| ❌ (Planned for 1.6/1.7) | **App Authentication** | Support Google Auth, Authy, etc. |
+| ✅ | **Chat Sync (Discord)** | Integrate Discord <-> Minecraft chat |
+| ✅ | **Discord RCON** | Integrate Discord RCON functionality |
+
+WIP - Work in progress  
+❌ - Not implemented  
+✅ - Done  
 
 </details>

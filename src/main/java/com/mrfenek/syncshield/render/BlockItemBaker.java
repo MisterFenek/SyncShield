@@ -377,6 +377,19 @@ public final class BlockItemBaker implements Runnable {
     }
 
     private static final class JsonUtils {
+        private static String cleanVersionString(String raw) {
+            if (raw == null) return "";
+            int buildIdx = raw.toLowerCase().indexOf(".build.");
+            if (buildIdx > 0) {
+                raw = raw.substring(0, buildIdx);
+            }
+            int dashIdx = raw.indexOf('-');
+            if (dashIdx > 0) {
+                raw = raw.substring(0, dashIdx);
+            }
+            return raw.trim();
+        }
+
         private static VersionInfo findVersionInfo(Path manifest, String requested) throws Exception {
             String json = new String(Files.readAllBytes(manifest));
             Gson gson = new Gson();
@@ -386,18 +399,30 @@ public final class BlockItemBaker implements Runnable {
             JsonElement versionsEl = root.get("versions");
             if (versionsEl == null || !versionsEl.isJsonArray()) return null;
 
+            String cleanedRequested = cleanVersionString(requested);
+
             VersionInfo exact = null;
             VersionInfo best = null;
-            int[] reqParts = parseVersion(requested);
+            VersionInfo latestRelease = null;
+
+            String latestReleaseId = null;
+            if (root.has("latest") && root.getAsJsonObject("latest").has("release")) {
+                latestReleaseId = root.getAsJsonObject("latest").get("release").getAsString();
+            }
+
+            int[] reqParts = parseVersion(cleanedRequested);
             for (JsonElement el : versionsEl.getAsJsonArray()) {
                 if (!el.isJsonObject()) continue;
                 JsonObject obj = el.getAsJsonObject();
                 if (!obj.has("id") || !obj.has("url")) continue;
                 String id = obj.get("id").getAsString();
                 String url = obj.get("url").getAsString();
-                if (id.equals(requested)) {
+                if (id.equals(requested) || id.equals(cleanedRequested)) {
                     exact = new VersionInfo(id, url);
                     break;
+                }
+                if (latestReleaseId != null && id.equals(latestReleaseId)) {
+                    latestRelease = new VersionInfo(id, url);
                 }
                 if (reqParts == null) continue;
                 int[] parts = parseVersion(id);
@@ -408,7 +433,14 @@ public final class BlockItemBaker implements Runnable {
                     best.parts = parts;
                 }
             }
-            return exact != null ? exact : best;
+            if (exact != null) return exact;
+            if (best != null) return best;
+            if (latestRelease != null) return latestRelease;
+            if (versionsEl.getAsJsonArray().size() > 0) {
+                JsonObject first = versionsEl.getAsJsonArray().get(0).getAsJsonObject();
+                return new VersionInfo(first.get("id").getAsString(), first.get("url").getAsString());
+            }
+            return null;
         }
 
         private static String findClientUrl(Path versionJson) throws Exception {
@@ -441,15 +473,13 @@ public final class BlockItemBaker implements Runnable {
 
         private static int[] parseVersion(String id) {
             if (id == null) return null;
-            String[] parts = id.split("\\.");
-            if (parts.length < 2) return null;
+            String clean = cleanVersionString(id);
+            String[] parts = clean.split("\\.");
+            if (parts.length < 1) return null;
             try {
                 int major = Integer.parseInt(parts[0]);
-                int minor = Integer.parseInt(parts[1]);
-                int patch = 0;
-                if (parts.length >= 3) {
-                    patch = Integer.parseInt(parts[2]);
-                }
+                int minor = parts.length >= 2 ? Integer.parseInt(parts[1]) : 0;
+                int patch = parts.length >= 3 ? Integer.parseInt(parts[2]) : 0;
                 return new int[]{major, minor, patch};
             } catch (NumberFormatException e) {
                 return null;

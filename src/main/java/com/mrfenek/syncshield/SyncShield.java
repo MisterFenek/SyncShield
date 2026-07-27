@@ -74,12 +74,16 @@ import com.mrfenek.syncshield.render.EnderChestRenderer;
 import com.mrfenek.syncshield.render.InventoryRenderer;
 import com.mrfenek.syncshield.render.ItemRenderer;
 import com.mrfenek.syncshield.render.TextureUtils;
+import com.mrfenek.syncshield.discord.DiscordBot;
+import com.mrfenek.syncshield.tickets.TicketManager;
+import com.mrfenek.syncshield.commands.TicketCommand;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 public final class SyncShield extends JavaPlugin implements Listener, CommandExecutor, org.bukkit.command.TabCompleter {
 
     private String botToken;
+    private boolean telegramEnabled = true;
     private long expiryMs = 12 * 60 * 60 * 1000L;
     private String op2faMode = "session";
     private String nonOp2faMode = "disabled";
@@ -89,6 +93,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
 
     private final Map<UUID, Long> linkedChats = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> linkedDiscordChats = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, Long>> approvedIps = new ConcurrentHashMap<>();
     private final Map<UUID, Set<String>> blacklistedIps = new ConcurrentHashMap<>();
     private final Map<String, PendingLink> pendingLinks = new ConcurrentHashMap<>();
@@ -113,6 +118,17 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private boolean chatSyncRenderItems = true;
     private boolean chatSyncRenderBooks = true;
     private boolean chatSyncRenderAdvancements = true;
+    private boolean discordChatSyncEnabled = false;
+    private boolean discordChatSyncChatMessages = true;
+    private boolean discordChatSyncJoinLeave = true;
+    private boolean discordChatSyncDeath = true;
+    private boolean discordChatSyncFromMc = true;
+    private boolean discordChatSyncFromDc = true;
+    private boolean discordChatSyncRenderInventory = true;
+    private boolean discordChatSyncRenderEnder = true;
+    private boolean discordChatSyncRenderItems = true;
+    private boolean discordChatSyncRenderBooks = true;
+    private boolean discordChatSyncRenderAdvancements = true;
     private String chatSyncTelegramFormat = "<b>%player%</b>: %message%";
     private String chatSyncMcFormat = "&7[TG] &f%player%: %message%";
     private String chatSyncAdvancementFormat = "<i>%player%</i> has made the advancement <b>%advancement%</b>: %description%";
@@ -127,6 +143,8 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private FileConfiguration messagesConfig;
     private volatile Thread pollingThread;
     private final AtomicBoolean blockItemBakeStarted = new AtomicBoolean(false);
+    private DiscordBot discordBot;
+    private TicketManager ticketManager;
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService httpExecutor = Executors.newFixedThreadPool(2);
@@ -168,10 +186,6 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             getLogger().info("Debug mode enabled. Expect verbose console output; disable after troubleshooting.");
         }
 
-        if (this.botToken == null || this.botToken.isEmpty() || this.botToken.equalsIgnoreCase("YOUR_BOT_TOKEN_HERE")) {
-            getLogger().warning("Telegram bot-token is not set in config.yml. The bot, 2FA approvals, and chat sync will not work until you set bot-token and /syncshield reload (or restart).");
-        }
-
         if (!getDataFolder().exists()) getDataFolder().mkdirs();
         startBlockItemBaker();
         initDatabase();
@@ -187,8 +201,36 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             cmd.setTabCompleter(this);
         }
 
-        pollingThread = new Thread(this::pollTelegramUpdates, "SyncShield-Polling");
-        pollingThread.start();
+        this.ticketManager = new TicketManager(this);
+        this.discordBot = new DiscordBot(this);
+        
+        TicketCommand tc = new TicketCommand(this);
+        org.bukkit.command.PluginCommand ticketCmd = getCommand("ticket");
+        if (ticketCmd != null) ticketCmd.setExecutor(tc);
+        org.bukkit.command.PluginCommand reportCmd = getCommand("report");
+        if (reportCmd != null) reportCmd.setExecutor(tc);
+
+        boolean tgActive = isTelegramActive();
+        boolean dcActive = isDiscordActive();
+
+        if (tgActive) {
+            pollingThread = new Thread(this::pollTelegramUpdates, "SyncShield-Polling");
+            pollingThread.start();
+            getLogger().info("Telegram bot integration enabled.");
+        } else {
+            getLogger().info("Telegram integration is disabled or bot-token is unconfigured.");
+        }
+
+        if (dcActive) {
+            getLogger().info("Discord bot integration enabled.");
+        } else {
+            getLogger().info("Discord integration is disabled or bot-token is unconfigured.");
+        }
+
+        if (!tgActive && !dcActive) {
+            getLogger().warning("Neither Telegram nor Discord integration is active! 2FA and bot functions are inactive until configured.");
+        }
+
         scheduler.scheduleAtFixedRate(this::cleanupExpiredIps, 1, 5, TimeUnit.MINUTES);
 
         if (!Bukkit.getOnlineMode()) {
@@ -200,8 +242,88 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         notifyAdmins("server_status", getMsg("ss-server-start"));
     }
 
+    private void ensureConfigHeader() {
+        File configFile = new File(getDataFolder(), "config.yml");
+        if (!configFile.exists()) return;
+        try {
+            List<String> lines = Files.readAllLines(configFile.toPath(), StandardCharsets.UTF_8);
+            List<String> cleanedLines = new ArrayList<>();
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("config-version:") || trimmed.equalsIgnoreCase("# --- DO NOT EDIT (Will probably break something) ---") || trimmed.equalsIgnoreCase("# Configuration version (DO NOT EDIT)")) {
+                    continue;
+                }
+                cleanedLines.add(line);
+            }
+            List<String> finalLines = new ArrayList<>();
+            finalLines.add("# --- DO NOT EDIT (Will probably break something) ---");
+            finalLines.add("config-version: 2");
+            finalLines.add("");
+            finalLines.addAll(cleanedLines);
+            Files.write(configFile.toPath(), finalLines, StandardCharsets.UTF_8);
+        } catch (IOException ignored) {}
+    }
+
+    private void checkAndMigrateConfig() {
+        int configVersion = getConfig().getInt("config-version", 1);
+        if (configVersion > 2) {
+            getConfig().set("config-version", 2);
+            saveConfig();
+            ensureConfigHeader();
+            return;
+        }
+        if (configVersion == 2) {
+            ensureConfigHeader();
+            return;
+        }
+
+        getLogger().info("Old config.yml format detected (version " + configVersion + "). Migrating configuration to version 2...");
+
+        File configFile = new File(getDataFolder(), "config.yml");
+        File backupFile = new File(getDataFolder(), "config_v1_backup.yml");
+
+        if (configFile.exists() && !backupFile.exists()) {
+            try {
+                Files.copy(configFile.toPath(), backupFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                getLogger().info("Created backup of old configuration at config_v1_backup.yml");
+            } catch (IOException e) {
+                getLogger().warning("Failed to create config backup: " + e.getMessage());
+            }
+        }
+
+        getConfig().set("config-version", 2);
+        if (!getConfig().contains("telegram-enabled")) getConfig().set("telegram-enabled", true);
+        if (!getConfig().contains("ticket-system-enabled")) getConfig().set("ticket-system-enabled", true);
+        if (!getConfig().contains("ticket-telegram-chat-id")) getConfig().set("ticket-telegram-chat-id", 0L);
+        if (!getConfig().contains("ticket-telegram-topic-id")) getConfig().set("ticket-telegram-topic-id", 0);
+        if (!getConfig().contains("discord-enabled")) getConfig().set("discord-enabled", false);
+        if (!getConfig().contains("discord-bot-token")) getConfig().set("discord-bot-token", "YOUR_DISCORD_BOT_TOKEN_HERE");
+        if (!getConfig().contains("discord-admin-roles")) getConfig().set("discord-admin-roles", new ArrayList<String>());
+        if (!getConfig().contains("discord-admin-ids")) getConfig().set("discord-admin-ids", new ArrayList<Long>());
+        if (!getConfig().contains("discord-rcon-enabled")) getConfig().set("discord-rcon-enabled", true);
+        if (!getConfig().contains("discord-chat-sync-enabled")) getConfig().set("discord-chat-sync-enabled", false);
+        if (!getConfig().contains("discord-chat-sync-channel")) getConfig().set("discord-chat-sync-channel", 0L);
+        if (!getConfig().contains("discord-chat-sync-chat-enabled")) getConfig().set("discord-chat-sync-chat-enabled", true);
+        if (!getConfig().contains("discord-chat-sync-join-leave-enabled")) getConfig().set("discord-chat-sync-join-leave-enabled", true);
+        if (!getConfig().contains("discord-chat-sync-death-enabled")) getConfig().set("discord-chat-sync-death-enabled", true);
+        if (!getConfig().contains("discord-chat-sync-from-mc")) getConfig().set("discord-chat-sync-from-mc", true);
+        if (!getConfig().contains("discord-chat-sync-from-dc")) getConfig().set("discord-chat-sync-from-dc", true);
+        if (!getConfig().contains("discord-chat-sync-render-inventory")) getConfig().set("discord-chat-sync-render-inventory", true);
+        if (!getConfig().contains("discord-chat-sync-render-ender")) getConfig().set("discord-chat-sync-render-ender", true);
+        if (!getConfig().contains("discord-chat-sync-render-items")) getConfig().set("discord-chat-sync-render-items", true);
+        if (!getConfig().contains("discord-chat-sync-render-books")) getConfig().set("discord-chat-sync-render-books", true);
+        if (!getConfig().contains("discord-chat-sync-render-advancements")) getConfig().set("discord-chat-sync-render-advancements", true);
+        if (!getConfig().contains("discord-ticket-channel")) getConfig().set("discord-ticket-channel", 0L);
+
+        saveConfig();
+        ensureConfigHeader();
+        getLogger().info("Configuration migration to version 2 completed successfully!");
+    }
+
     private void reloadPlugin() {
         reloadConfig();
+        checkAndMigrateConfig();
+        this.telegramEnabled = getConfig().getBoolean("telegram-enabled", true);
         this.botToken = getConfig().getString("bot-token", "YOUR_BOT_TOKEN_HERE");
         this.debugEnabled = getConfig().getBoolean("debug", false);
         this.ownerId = getConfig().getLong("owner-id", 0L);
@@ -225,6 +347,17 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         this.chatSyncRenderItems = getConfig().getBoolean("chat-sync-render-items", true);
         this.chatSyncRenderBooks = getConfig().getBoolean("chat-sync-render-books", true);
         this.chatSyncRenderAdvancements = getConfig().getBoolean("chat-sync-render-advancements", true);
+        this.discordChatSyncEnabled = getConfig().getBoolean("discord-chat-sync-enabled", false);
+        this.discordChatSyncChatMessages = getConfig().getBoolean("discord-chat-sync-chat-enabled", true);
+        this.discordChatSyncJoinLeave = getConfig().getBoolean("discord-chat-sync-join-leave-enabled", true);
+        this.discordChatSyncDeath = getConfig().getBoolean("discord-chat-sync-death-enabled", true);
+        this.discordChatSyncFromMc = getConfig().getBoolean("discord-chat-sync-from-mc", true);
+        this.discordChatSyncFromDc = getConfig().getBoolean("discord-chat-sync-from-dc", true);
+        this.discordChatSyncRenderInventory = getConfig().getBoolean("discord-chat-sync-render-inventory", true);
+        this.discordChatSyncRenderEnder = getConfig().getBoolean("discord-chat-sync-render-ender", true);
+        this.discordChatSyncRenderItems = getConfig().getBoolean("discord-chat-sync-render-items", true);
+        this.discordChatSyncRenderBooks = getConfig().getBoolean("discord-chat-sync-render-books", true);
+        this.discordChatSyncRenderAdvancements = getConfig().getBoolean("discord-chat-sync-render-advancements", true);
         this.rconAllowedCommands.clear();
         getConfig().getStringList("rcon-allowed-commands").forEach(cmd -> rconAllowedCommands.add(cmd.toLowerCase(Locale.ROOT).trim()));
         this.bakeBlockItemsOnStartup = getConfig().getBoolean("bake-block-items-on-startup", true);
@@ -272,14 +405,19 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private boolean isSupportedServer() {
         try {
             String version = Bukkit.getBukkitVersion();
-            if (version == null) return false;
+            if (version == null) return true;
             String base = version.split("-")[0];
             String[] parts = base.split("\\.");
-            if (parts.length < 2) return false;
-            int minor = Integer.parseInt(parts[1]);
-            return minor >= 16;
+            if (parts.length < 1) return true;
+            int major = Integer.parseInt(parts[0]);
+            if (major >= 2 || major == 0) return true; // Supports 26.x, 2.x, 1.16+
+            if (major == 1 && parts.length >= 2) {
+                int minor = Integer.parseInt(parts[1]);
+                return minor >= 16;
+            }
+            return true;
         } catch (Exception ignored) {
-            return false;
+            return true;
         }
     }
 
@@ -341,7 +479,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
     }
 
-    private String escapeHtml(String text) {
+    public String escapeHtml(String text) {
         if (text == null) return "";
         return text.replace("&", "&amp;")
                    .replace("<", "&lt;")
@@ -451,6 +589,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 } catch (IOException ignored) {}
             }
         }
+        ItemRenderer.setLanguage(messagesConfig.getString("language-internal", "en"), getMsg("ss-render-durability"));
     }
 
     private void migrateLegacyConfigsAndJars() {
@@ -541,8 +680,11 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 });
     }
 
-    private String getMsg(String key) {
-        return messagesConfig.getString(key, "Message missing: " + key);
+    public String getMsg(String key) {
+        if (messagesConfig == null) return key;
+        String val = messagesConfig.getString(key);
+        if (val == null) return "Message missing: " + key;
+        return ChatColor.translateAlternateColorCodes('&', val);
     }
 
     private void debug(String message) {
@@ -814,9 +956,9 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     @Override
     public void onDisable() {
         isRunning = false;
-        if (pollingThread != null) {
-            pollingThread.interrupt();
-        }
+        if (pollingThread != null) pollingThread.interrupt();
+        if (discordBot != null) discordBot.shutdown();
+        if (renderExecutor != null) renderExecutor.shutdownNow();
         notifyAdminsSync("server_status", getMsg("ss-server-stop"));
         saveData();
         closeDatabase();
@@ -864,9 +1006,9 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             notifyAdmins("join_leave", getMsg("ss-admin-join").replace("%player%", escapeHtml(player.getName())));
         }
 
-        if (chatSyncEnabled && chatSyncFromMc && chatSyncJoinLeave) {
+        if ((chatSyncEnabled && chatSyncFromMc && chatSyncJoinLeave) || (discordChatSyncEnabled && discordChatSyncFromMc && discordChatSyncJoinLeave)) {
             String formatted = chatSyncJoinFormat.replace("%player%", escapeHtml(player.getName()));
-            sendChatSyncMessageToTelegram(formatted);
+            sendChatSyncMessageToTelegram(formatted, "join");
         }
     }
 
@@ -875,9 +1017,9 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         if (event.getPlayer().isOp()) {
             notifyAdmins("join_leave", getMsg("ss-admin-quit").replace("%player%", escapeHtml(event.getPlayer().getName())));
         }
-        if (chatSyncEnabled && chatSyncFromMc && chatSyncJoinLeave) {
+        if ((chatSyncEnabled && chatSyncFromMc && chatSyncJoinLeave) || (discordChatSyncEnabled && discordChatSyncFromMc && discordChatSyncJoinLeave)) {
             String formatted = chatSyncQuitFormat.replace("%player%", escapeHtml(event.getPlayer().getName()));
-            sendChatSyncMessageToTelegram(formatted);
+            sendChatSyncMessageToTelegram(formatted, "quit");
         }
     }
 
@@ -890,7 +1032,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     @EventHandler
     public void onPlayerChat(AsyncPlayerChatEvent event) {
-        if (!chatSyncEnabled || !chatSyncFromMc || event.isCancelled()) return;
+        if (((!chatSyncEnabled || !chatSyncFromMc) && (!discordChatSyncEnabled || !discordChatSyncFromMc)) || event.isCancelled()) return;
         Player player = event.getPlayer();
         String message = event.getMessage();
         handleChatSyncFromMinecraft(player, message);
@@ -898,29 +1040,34 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     @EventHandler
     public void onPlayerAdvancementDone(PlayerAdvancementDoneEvent event) {
-        if (!chatSyncEnabled || !chatSyncRenderAdvancements) return;
+        if ((!chatSyncEnabled || !chatSyncRenderAdvancements) && (!discordChatSyncEnabled || !discordChatSyncRenderAdvancements)) return;
         handleAdvancementRender(event);
     }
 
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
-        if (!chatSyncEnabled || !chatSyncFromMc || !chatSyncDeath) return;
+        if ((!chatSyncEnabled || !chatSyncFromMc || !chatSyncDeath) && (!discordChatSyncEnabled || !discordChatSyncFromMc || !discordChatSyncDeath)) return;
         String message = event.getDeathMessage();
         if (message == null || message.trim().isEmpty()) return;
         String formatted = chatSyncDeathFormat
                 .replace("%player%", escapeHtml(event.getEntity().getName()))
                 .replace("%message%", escapeHtml(message));
-        sendChatSyncMessageToTelegram(formatted);
+        sendChatSyncMessageToTelegram(formatted, "death");
     }
 
     private void notifyAdmins(String category, String message) {
-        if (ownerId != 0 && !disabledNotifications.getOrDefault(ownerId, Collections.emptySet()).contains(category)) {
-            sendTelegramMessage(ownerId, message);
-        }
-        for (long adminId : adminIds) {
-            if (adminId != ownerId && !disabledNotifications.getOrDefault(adminId, Collections.emptySet()).contains(category)) {
-                sendTelegramMessage(adminId, message);
+        if (isTelegramActive()) {
+            if (ownerId != 0 && !disabledNotifications.getOrDefault(ownerId, Collections.emptySet()).contains(category)) {
+                sendTelegramMessage(ownerId, message);
             }
+            for (long adminId : adminIds) {
+                if (adminId != ownerId && !disabledNotifications.getOrDefault(adminId, Collections.emptySet()).contains(category)) {
+                    sendTelegramMessage(adminId, message);
+                }
+            }
+        }
+        if (isDiscordActive()) {
+            discordBot.broadcastToDiscord(DiscordBot.htmlToMarkdown(message));
         }
     }
 
@@ -937,7 +1084,23 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     private boolean isChatAdmin(long chatId) {
         if (chatId == 0) return false;
-        return chatId == ownerId || adminIds.contains(chatId);
+        if (chatId == ownerId || adminIds.contains(chatId)) return true;
+
+        for (Map.Entry<UUID, Long> entry : linkedChats.entrySet()) {
+            if (entry.getValue().equals(chatId)) {
+                OfflinePlayer op = Bukkit.getOfflinePlayer(entry.getKey());
+                if (op != null && op.isOp()) {
+                    if (ownerId == 0) {
+                        ownerId = chatId;
+                        getConfig().set("owner-id", ownerId);
+                        saveConfig();
+                        getLogger().info("[SyncShield] Automatically assigned Telegram User ID " + chatId + " as owner-id (Linked OP: " + op.getName() + ").");
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @EventHandler
@@ -970,8 +1133,19 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             return;
         }
 
-        if (!linkedChats.containsKey(uuid)) {
-            debug("Refusing connection for " + name + ": Account not linked to Telegram.");
+        boolean tgActive = isTelegramActive();
+        boolean dcActive = isDiscordActive();
+
+        if (!tgActive && !dcActive) {
+            debug("Skipping 2FA check for " + name + ": Neither Telegram nor Discord bot is active.");
+            return;
+        }
+
+        boolean linkedTg = tgActive && linkedChats.containsKey(uuid);
+        boolean linkedDc = dcActive && linkedDiscordChats.containsKey(uuid);
+
+        if (!linkedTg && !linkedDc) {
+            debug("Refusing connection for " + name + ": Account not linked.");
             notifyAdmins("security", getMsg("ss-admin-unlinked-attempt").replace("%player%", escapeHtml(name)).replace("%ip%", escapeHtml(ip)));
             
             String code = generateCode(uuid);
@@ -1003,7 +1177,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             }
         }
 
-        debug("Suspending login for " + name + ": 2FA verification required via Telegram.");
+        debug("Suspending login for " + name + ": 2FA verification required.");
         event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
                 colorizeOrDefault(getMsg("kick-2fa"), ChatColor.YELLOW));
         
@@ -1011,12 +1185,70 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         pendingApprovals.put(approvalId, new PendingApproval(uuid, ip));
         
         String tgMsg = getMsg("ss-2fa-prompt").replace("%ip%", escapeHtml(ip)).replace("%player%", escapeHtml(name));
-        sendTelegramMessageWithButtons(linkedChats.get(uuid), tgMsg, approvalId);
+        
+        if (linkedChats.containsKey(uuid)) {
+            sendTelegramMessageWithButtons(linkedChats.get(uuid), tgMsg, approvalId);
+        }
+        
+        if (discordBot != null && linkedDiscordChats.containsKey(uuid)) {
+            discordBot.send2faRequest(linkedDiscordChats.get(uuid), tgMsg, approvalId);
+        }
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
-        if (!command.getName().equalsIgnoreCase("syncshield")) return false;
+        String cmdName = command.getName().toLowerCase(Locale.ROOT);
+        if (cmdName.equals("ticket")) {
+            if (!(sender instanceof org.bukkit.entity.Player)) {
+                sender.sendMessage(getMsg("mc-player-only"));
+                return true;
+            }
+            org.bukkit.entity.Player player = (org.bukkit.entity.Player) sender;
+            if (args.length == 0) {
+                player.sendMessage(getMsg("ticket-usage"));
+                return true;
+            }
+            String first = args[0].toLowerCase(Locale.ROOT);
+            if (first.equals("chat")) {
+                if (args.length < 2) {
+                    player.sendMessage(getMsg("ticket-chat-usage"));
+                    return true;
+                }
+                String msg = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
+                ticketManager.handlePlayerChat(player, msg);
+                return true;
+            }
+            if (first.equals("close")) {
+                TicketManager.Ticket active = ticketManager.getActiveTicketByPlayer(player.getUniqueId());
+                if (active != null) {
+                    ticketManager.closeTicket(active.id, player.getName());
+                } else {
+                    player.sendMessage(getMsg("ticket-no-active"));
+                }
+                return true;
+            }
+            String msg = String.join(" ", args);
+            ticketManager.createTicket(player, "Ticket", msg);
+            return true;
+        }
+
+        if (cmdName.equals("report")) {
+            if (!(sender instanceof org.bukkit.entity.Player)) {
+                sender.sendMessage(getMsg("mc-player-only"));
+                return true;
+            }
+            org.bukkit.entity.Player player = (org.bukkit.entity.Player) sender;
+            if (args.length < 2) {
+                player.sendMessage(getMsg("report-usage"));
+                return true;
+            }
+            String target = args[0];
+            String reason = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
+            ticketManager.createTicket(player, "Report", "Report against " + target + ": " + reason);
+            return true;
+        }
+
+        if (!cmdName.equals("syncshield")) return false;
 
         if (args.length == 0) {
             sender.sendMessage(colorizeOrDefault(getMsg("ss-usage"), ChatColor.RED));
@@ -1230,21 +1462,29 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         String code;
         do {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 10; i++) sb.append(alphabet.charAt(secureRandom.nextInt(alphabet.length())));
+            for (int i = 0; i < 6; i++) sb.append(alphabet.charAt(secureRandom.nextInt(alphabet.length())));
             code = sb.toString();
         } while (pendingLinks.containsKey(code));
         return code;
     }
 
     private String generateShortId() {
-        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         String id;
         do {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 12; i++) sb.append(alphabet.charAt(secureRandom.nextInt(alphabet.length())));
+            for (int i = 0; i < 6; i++) sb.append(alphabet.charAt(secureRandom.nextInt(alphabet.length())));
             id = sb.toString();
         } while (pendingApprovals.containsKey(id) || ipManagerShortIds.containsKey(id));
         return id;
+    }
+
+    public PendingLink consumePendingLink(String rawCode) {
+        if (rawCode == null) return null;
+        String clean = rawCode.trim().toUpperCase(Locale.ROOT);
+        PendingLink link = pendingLinks.remove(clean);
+        if (link != null) return link;
+        return pendingLinks.remove(rawCode.trim());
     }
 
     private static class PendingLink {
@@ -1256,10 +1496,10 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
     }
 
-    private static class PendingApproval {
-        final UUID uuid;
-        final String ip;
-        final long timestamp;
+    public static class PendingApproval {
+        public final UUID uuid;
+        public final String ip;
+        public final long timestamp;
         PendingApproval(UUID uuid, String ip) {
             this.uuid = uuid;
             this.ip = ip;
@@ -1324,25 +1564,63 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                             boolean topicMatches = requiredTopicId == null
                                     || (message.has("message_thread_id") && message.get("message_thread_id").getAsInt() == requiredTopicId);
                             
-                            if (privateOnly && !chatType.equals("private") && !isChatSyncChat) {
-                                debug("Ignoring message from non-private chat: " + chatType);
-                                continue;
-                            }
-
                             if (message.has("text")) {
-                                String text = message.get("text").getAsString();
+                                String rawText = message.get("text").getAsString().trim();
+                                String text = cleanTelegramCommand(rawText);
+
+                                if (message.has("reply_to_message")) {
+                                    JsonObject replyTo = message.getAsJsonObject("reply_to_message");
+                                    long replyMsgId = replyTo.get("message_id").getAsLong();
+                                    TicketManager.Ticket ticket = ticketManager.getTicketByTelegramMessage(replyMsgId);
+                                    if (ticket != null) {
+                                        String adminName = getTelegramSenderName(message);
+                                        long topicId = message.has("message_thread_id") ? message.get("message_thread_id").getAsLong() : 0L;
+                                        Integer topicThreadId = topicId != 0L ? (int) topicId : null;
+
+                                        if (text.equalsIgnoreCase("/close") || text.equalsIgnoreCase("/ticket close")) {
+                                            ticketManager.closeTicket(ticket.id, adminName);
+                                            sendTelegramMessage(chatId, getMsg("ss-ticket-closed-tg").replace("%id%", ticket.id).replace("%admin%", escapeHtml(adminName)), topicThreadId);
+                                        } else {
+                                            if (ticket.status.equals("Open")) {
+                                                ticketManager.claimTicket(ticket.id, adminName);
+                                            }
+                                            Player p = Bukkit.getPlayer(ticket.creator);
+                                            if (p != null && p.isOnline()) {
+                                                String replyFmt = getMsg("ticket-admin-reply-format")
+                                                        .replace("%id%", ticket.id)
+                                                        .replace("%admin%", adminName)
+                                                        .replace("%message%", rawText);
+                                                p.sendMessage(ChatColor.translateAlternateColorCodes('&', replyFmt));
+                                            }
+                                            sendTelegramMessage(chatId, getMsg("ss-ticket-reply-sent").replace("%player%", escapeHtml(ticket.creatorName)), topicThreadId);
+                                        }
+                                        continue;
+                                    }
+                                }
 
                                 if (text.startsWith("/start")) {
-                                    handleStartCommand(chatId, fromId);
+                                    String[] parts = text.split("\\s+");
+                                    PendingLink link = parts.length >= 2 ? consumePendingLink(parts[1]) : null;
+                                    if (link != null) {
+                                        UUID uuid = link.uuid;
+                                        linkedChats.put(uuid, chatId);
+                                        handleOpAccountLinking(uuid, fromId, false);
+                                        String name = Bukkit.getOfflinePlayer(uuid).getName();
+                                        sendTelegramMessage(chatId, getMsg("ss-linked").replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
+                                        saveData();
+                                    } else {
+                                        handleStartCommand(chatId, fromId);
+                                    }
                                 } else if (text.startsWith("/mclink")) {
-                                    String[] parts = text.split(" ");
+                                    String[] parts = text.split("\\s+");
                                     if (parts.length < 2) {
                                         sendTelegramMessage(chatId, getMsg("ss-mclink-usage"));
                                     } else {
-                                        String code = parts[1];
-                                        if (pendingLinks.containsKey(code)) {
-                                            UUID uuid = pendingLinks.remove(code).uuid;
+                                        PendingLink link = consumePendingLink(parts[1]);
+                                        if (link != null) {
+                                            UUID uuid = link.uuid;
                                             linkedChats.put(uuid, chatId);
+                                            handleOpAccountLinking(uuid, fromId, false);
                                             String name = Bukkit.getOfflinePlayer(uuid).getName();
                                             sendTelegramMessage(chatId, getMsg("ss-linked").replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
                                             saveData();
@@ -1350,36 +1628,43 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                                             sendTelegramMessage(chatId, getMsg("ss-invalid-code"));
                                         }
                                     }
-                                } else if (pendingLinks.containsKey(text)) {
-                                    UUID uuid = pendingLinks.remove(text).uuid;
-                                    linkedChats.put(uuid, chatId);
-                                    String name = Bukkit.getOfflinePlayer(uuid).getName();
-                                    sendTelegramMessage(chatId, getMsg("ss-linked").replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
-                                    saveData();
-                                } else if (isChatAdmin(fromId)) {
-                                    if (text.startsWith("/rcon ") && rconEnabled) {
-                                        chatStates.remove(chatId);
-                                        handleRconCommand(chatId, text.substring(6));
-                                    } else if (text.equalsIgnoreCase("/players")) {
-                                        chatStates.remove(chatId);
-                                        handlePlayersCommand(chatId);
-                                    } else if (text.equalsIgnoreCase("/settings")) {
-                                        chatStates.remove(chatId);
-                                        handleSettingsCommand(chatId);
-                                    } else if (text.equalsIgnoreCase("/cancel")) {
-                                        chatStates.remove(chatId);
-                                        sendTelegramMessage(chatId, getMsg("ss-cancelled"));
-                                    } else if (chatStates.containsKey(chatId)) {
-                                        handleStateMessage(chatId, text);
-                                    } else if (text.startsWith("/") && rconEnabled) {
-                                        chatStates.remove(chatId);
-                                        handleRconCommand(chatId, text.substring(1));
+                                } else {
+                                    PendingLink link = consumePendingLink(text);
+                                    if (link != null) {
+                                        UUID uuid = link.uuid;
+                                        linkedChats.put(uuid, chatId);
+                                        handleOpAccountLinking(uuid, fromId, false);
+                                        String name = Bukkit.getOfflinePlayer(uuid).getName();
+                                        sendTelegramMessage(chatId, getMsg("ss-linked").replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
+                                        saveData();
+                                    } else if (text.equalsIgnoreCase("/help")) {
+                                        sendTelegramMessage(chatId, getMsg("ss-help-message"));
+                                    } else {
+                                        if (privateOnly && !chatType.equals("private") && !isChatSyncChat) {
+                                            debug("Ignoring command from non-private chat: " + chatType);
+                                        } else if (isChatAdmin(fromId)) {
+                                            if (text.startsWith("/rcon ") && rconEnabled) {
+                                                chatStates.remove(chatId);
+                                                handleRconCommand(chatId, text.substring(6));
+                                            } else if (text.equalsIgnoreCase("/players")) {
+                                                chatStates.remove(chatId);
+                                                handlePlayersCommand(chatId);
+                                            } else if (text.equalsIgnoreCase("/settings")) {
+                                                chatStates.remove(chatId);
+                                                handleSettingsCommand(chatId);
+                                            } else if (text.equalsIgnoreCase("/cancel")) {
+                                                chatStates.remove(chatId);
+                                                sendTelegramMessage(chatId, getMsg("ss-cancelled"));
+                                            } else if (chatStates.containsKey(chatId)) {
+                                                handleStateMessage(chatId, text);
+                                            }
+                                        }
                                     }
                                 }
 
-                                if (isChatSyncChat && chatSyncFromTg && topicMatches && !text.startsWith("/")) {
+                                if (isChatSyncChat && chatSyncFromTg && topicMatches && !rawText.startsWith("/")) {
                                     String senderName = getTelegramSenderName(message);
-                                    sendChatSyncToMinecraft(text, senderName, message.get("chat").getAsJsonObject());
+                                    sendChatSyncToMinecraft(rawText, senderName, message.get("chat").getAsJsonObject());
                                 }
                             }
                         } else if (update.has("callback_query")) {
@@ -1477,40 +1762,59 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     }
 
     private void handleChatSyncFromMinecraft(Player player, String message) {
-        if (chatSyncChatIds.isEmpty()) return;
+        if (!isTelegramActive() && !isDiscordActive()) return;
+        if ((!chatSyncEnabled || !chatSyncFromMc) && (!discordChatSyncEnabled || !discordChatSyncFromMc)) return;
         String lower = message.toLowerCase(Locale.ROOT);
         String playerName = player.getName();
 
-        if (chatSyncRenderInventory && lower.contains("[inv]")) {
+        boolean renderInvAllowed = (isTelegramActive() && chatSyncEnabled && chatSyncRenderInventory) ||
+                                  (isDiscordActive() && discordChatSyncEnabled && discordChatSyncRenderInventory);
+        if (renderInvAllowed && lower.contains("[inv]")) {
             if (enqueueRender(player.getUniqueId(), () -> {
                 String[] beforeAfter = userMessageBeforeAfter(message, "[inv]");
                 byte[] image = new InventoryRenderer().renderInventory(player.getInventory());
                 String caption = formatCaption(playerName, beforeAfter[0], "Inventory", beforeAfter[1], true);
-                sendChatSyncPhotoToTelegram(image, caption);
+                sendChatSyncPhoto(image, caption, "inventory");
             })) return;
         }
 
-        if (chatSyncRenderEnder && lower.contains("[ender]")) {
+        boolean renderEnderAllowed = (isTelegramActive() && chatSyncEnabled && chatSyncRenderEnder) ||
+                                    (isDiscordActive() && discordChatSyncEnabled && discordChatSyncRenderEnder);
+        if (renderEnderAllowed && lower.contains("[ender]")) {
             if (enqueueRender(player.getUniqueId(), () -> {
                 String[] beforeAfter = userMessageBeforeAfter(message, "[ender]");
                 byte[] image = new EnderChestRenderer().renderEnderChest(player.getEnderChest());
                 String caption = formatCaption(playerName, beforeAfter[0], "Ender Chest", beforeAfter[1], true);
-                sendChatSyncPhotoToTelegram(image, caption);
+                sendChatSyncPhoto(image, caption, "ender");
             })) return;
         }
 
-        if (chatSyncRenderItems && lower.contains("[item]")) {
+        boolean renderItemAllowed = (isTelegramActive() && chatSyncEnabled && chatSyncRenderItems) ||
+                                   (isDiscordActive() && discordChatSyncEnabled && discordChatSyncRenderItems);
+        if (renderItemAllowed && lower.contains("[item]")) {
             ItemStack item = player.getInventory().getItemInMainHand();
             if (item == null || item.getType() == null || item.getType() == Material.AIR) {
                 String[] beforeAfter = userMessageBeforeAfter(message, "[item]");
                 String caption = playerName + ": " + beforeAfter[0] + "[Empty hand]" + beforeAfter[1];
-                sendChatSyncMessageToTelegram(caption);
+                sendChatSyncMessageToTelegram(caption, "chat");
                 return;
             }
-            if (chatSyncRenderBooks && item != null && item.getType() != null && item.getType().name().toLowerCase(Locale.ROOT).contains("book")) {
+
+            boolean renderBookAllowed = (isTelegramActive() && chatSyncEnabled && chatSyncRenderBooks) ||
+                                       (isDiscordActive() && discordChatSyncEnabled && discordChatSyncRenderBooks);
+            if (renderBookAllowed && item != null && item.getItemMeta() instanceof org.bukkit.inventory.meta.BookMeta) {
                 enqueueRender(player.getUniqueId(), () -> {
                     BookRenderer.BookRenderResult result = new BookRenderer().renderBook(item);
-                    sendBookRenderToTelegram(playerName, result);
+                    if (result != null && !result.getPages().isEmpty()) {
+                        sendBookRenderToTelegram(playerName, result);
+                    } else {
+                        ItemRenderer.ItemRenderResult itemResult = new ItemRenderer().renderItem(item);
+                        String displayName = itemResult.getItemName();
+                        String amountSuffix = item != null && item.getAmount() > 1 ? " x " + item.getAmount() : "";
+                        String[] beforeAfter = userMessageBeforeAfter(message, "[item]");
+                        String caption = playerName + ": " + beforeAfter[0] + "[" + escapeHtml(displayName + amountSuffix) + "]" + beforeAfter[1];
+                        sendChatSyncPhoto(itemResult.getImageBytes(), caption, "item");
+                    }
                 });
                 return;
             }
@@ -1521,7 +1825,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                     String[] beforeAfter = userMessageBeforeAfter(message, "[item]");
                     byte[] image = new EnderChestRenderer().renderEnderChest(shulkerInventory);
                     String caption = formatCaption(playerName, beforeAfter[0], "Shulker Box", beforeAfter[1], false);
-                    sendChatSyncPhotoToTelegram(image, caption);
+                    sendChatSyncPhoto(image, caption, "item");
                     return;
                 }
 
@@ -1530,16 +1834,18 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 String amountSuffix = item != null && item.getAmount() > 1 ? " x " + item.getAmount() : "";
                 String[] beforeAfter = userMessageBeforeAfter(message, "[item]");
                 String caption = playerName + ": " + beforeAfter[0] + "[" + escapeHtml(displayName + amountSuffix) + "]" + beforeAfter[1];
-                sendChatSyncPhotoToTelegram(result.getImageBytes(), caption);
+                sendChatSyncPhoto(result.getImageBytes(), caption, "item");
             });
             return;
         }
 
-        if (chatSyncChatMessages) {
+        boolean chatMsgAllowed = (isTelegramActive() && chatSyncEnabled && chatSyncChatMessages) ||
+                                (isDiscordActive() && discordChatSyncEnabled && discordChatSyncChatMessages);
+        if (chatMsgAllowed) {
             String formatted = chatSyncTelegramFormat
                     .replace("%player%", escapeHtml(playerName))
                     .replace("%message%", escapeHtml(message));
-            sendChatSyncMessageToTelegram(formatted);
+            sendChatSyncMessageToTelegram(formatted, "chat");
         }
     }
 
@@ -1555,15 +1861,40 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             } else {
                 caption = playerName + ": Page " + index + " of " + total;
             }
-            sendChatSyncPhotoToTelegram(page, caption);
+            sendChatSyncPhoto(page, caption, "book");
             index++;
         }
     }
 
     private void sendChatSyncMessageToTelegram(String formattedHtml) {
-        for (long chatId : chatSyncChatIds) {
-            Integer threadId = chatSyncTopicIds.get(chatId);
-            sendTelegramMessage(chatId, formattedHtml, threadId);
+        sendChatSyncMessageToTelegram(formattedHtml, "chat");
+    }
+
+    private void sendChatSyncMessageToTelegram(String formattedHtml, String messageType) {
+        if (isTelegramActive() && chatSyncEnabled && chatSyncFromMc) {
+            boolean allowed = true;
+            if ("chat".equals(messageType)) allowed = chatSyncChatMessages;
+            else if ("join".equals(messageType) || "quit".equals(messageType)) allowed = chatSyncJoinLeave;
+            else if ("death".equals(messageType)) allowed = chatSyncDeath;
+
+            if (allowed) {
+                for (long chatId : chatSyncChatIds) {
+                    Integer threadId = chatSyncTopicIds.get(chatId);
+                    sendTelegramMessage(chatId, formattedHtml, threadId);
+                }
+            }
+        }
+
+        if (isDiscordActive() && discordChatSyncEnabled && discordChatSyncFromMc) {
+            boolean allowed = true;
+            if ("chat".equals(messageType)) allowed = discordChatSyncChatMessages;
+            else if ("join".equals(messageType) || "quit".equals(messageType)) allowed = discordChatSyncJoinLeave;
+            else if ("death".equals(messageType)) allowed = discordChatSyncDeath;
+
+            if (allowed) {
+                String plainText = DiscordBot.htmlToMarkdown(formattedHtml);
+                discordBot.broadcastToDiscord(plainText);
+            }
         }
     }
 
@@ -1578,14 +1909,47 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         Bukkit.getScheduler().runTask(this, () -> Bukkit.broadcastMessage(colored));
     }
 
-    private void sendChatSyncPhotoToTelegram(byte[] imageBytes, String caption) {
+    private void sendChatSyncPhoto(byte[] imageBytes, String caption) {
+        sendChatSyncPhoto(imageBytes, caption, null);
+    }
+
+    private void sendChatSyncPhoto(byte[] imageBytes, String caption, @Nullable String renderType) {
         if (imageBytes == null || imageBytes.length == 0) {
-            sendChatSyncMessageToTelegram(caption);
+            sendChatSyncMessageToTelegram(caption, "chat");
             return;
         }
-        for (long chatId : chatSyncChatIds) {
-            Integer threadId = chatSyncTopicIds.get(chatId);
-            sendTelegramPhoto(chatId, imageBytes, caption, threadId);
+        if (isTelegramActive() && chatSyncEnabled && chatSyncFromMc && isRenderAllowedForTelegram(renderType)) {
+            for (long chatId : chatSyncChatIds) {
+                Integer threadId = chatSyncTopicIds.get(chatId);
+                sendTelegramPhoto(chatId, imageBytes, caption, threadId);
+            }
+        }
+        if (isDiscordActive() && discordChatSyncEnabled && discordChatSyncFromMc && isRenderAllowedForDiscord(renderType)) {
+            discordBot.sendPhotoToDiscord(imageBytes, caption);
+        }
+    }
+
+    private boolean isRenderAllowedForTelegram(@Nullable String renderType) {
+        if (renderType == null) return true;
+        switch (renderType) {
+            case "inventory": return chatSyncRenderInventory;
+            case "ender": return chatSyncRenderEnder;
+            case "item": return chatSyncRenderItems;
+            case "book": return chatSyncRenderBooks;
+            case "advancement": return chatSyncRenderAdvancements;
+            default: return true;
+        }
+    }
+
+    private boolean isRenderAllowedForDiscord(@Nullable String renderType) {
+        if (renderType == null) return true;
+        switch (renderType) {
+            case "inventory": return discordChatSyncRenderInventory;
+            case "ender": return discordChatSyncRenderEnder;
+            case "item": return discordChatSyncRenderItems;
+            case "book": return discordChatSyncRenderBooks;
+            case "advancement": return discordChatSyncRenderAdvancements;
+            default: return true;
         }
     }
 
@@ -1618,7 +1982,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     }
 
     private void handleAdvancementRender(PlayerAdvancementDoneEvent event) {
-        if (chatSyncChatIds.isEmpty()) return;
+        if (chatSyncChatIds.isEmpty() && (!isDiscordActive() || !discordChatSyncEnabled)) return;
         try {
             Object advancement = event.getAdvancement();
             Object display = null;
@@ -1660,9 +2024,13 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                     .replace("%advancement%", escapeHtml(title))
                     .replace("%description%", escapeHtml(description));
 
-            byte[] image = new AdvancementRenderer().renderAdvancement(title, frame, icon, textColor);
-            sendChatSyncPhotoToTelegram(image, message);
-        } catch (Exception ignored) {}
+            byte[] image = new byte[0];
+            try {
+                image = new com.mrfenek.syncshield.render.AdvancementRenderer().renderAdvancement(title, frame, icon, textColor);
+            } catch (Throwable ignored) {}
+
+            sendChatSyncPhoto(image, message, "advancement");
+        } catch (Throwable ignored) {}
     }
 
     private Object callIfExists(Object target, String... methodNames) {
@@ -1720,6 +2088,22 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
         ShulkerBox shulkerBox = (ShulkerBox) meta.getBlockState();
         return shulkerBox.getInventory();
+    }
+
+    private String cleanTelegramCommand(String text) {
+        if (text == null) return "";
+        text = text.trim();
+        if (text.startsWith("/")) {
+            int firstSpace = text.indexOf(' ');
+            String cmdToken = firstSpace > 0 ? text.substring(0, firstSpace) : text;
+            int atIdx = cmdToken.indexOf('@');
+            if (atIdx > 0) {
+                String baseCmd = cmdToken.substring(0, atIdx);
+                String rest = firstSpace > 0 ? text.substring(firstSpace) : "";
+                return baseCmd + rest;
+            }
+        }
+        return text;
     }
 
     private String getTelegramSenderName(JsonObject message) {
@@ -2125,6 +2509,38 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             return;
         }
 
+        if (data.startsWith("ticket_claim:") || data.startsWith("ticket_close:")) {
+            String[] parts = data.split(":");
+            if (parts.length >= 2) {
+                String ticketId = parts[1];
+                String adminName = cb.get("from").getAsJsonObject().has("username") ? 
+                        "@" + cb.get("from").getAsJsonObject().get("username").getAsString() : 
+                        cb.get("from").getAsJsonObject().get("first_name").getAsString();
+                
+                if (data.startsWith("ticket_claim:")) {
+                    ticketManager.claimTicket(ticketId, adminName);
+                    if (cb.has("message")) {
+                        JsonObject origMsg = cb.get("message").getAsJsonObject();
+                        int msgId = origMsg.get("message_id").getAsInt();
+                        String curText = origMsg.has("text") ? origMsg.get("text").getAsString() : "";
+                        editTelegramMessage(chatId, msgId, curText + "\n\n<i>Claimed by " + escapeHtml(adminName) + "</i>", null);
+                    }
+                } else if (data.startsWith("ticket_close:")) {
+                    ticketManager.closeTicket(ticketId, adminName);
+                    if (cb.has("message")) {
+                        JsonObject origMsg = cb.get("message").getAsJsonObject();
+                        int msgId = origMsg.get("message_id").getAsInt();
+                        String curText = origMsg.has("text") ? origMsg.get("text").getAsString() : "";
+                        editTelegramMessage(chatId, msgId, curText + "\n\n<i>Closed by " + escapeHtml(adminName) + "</i>", null);
+                    }
+                }
+            }
+            JsonObject ans = new JsonObject();
+            ans.addProperty("callback_query_id", id);
+            executeTelegramRequest("answerCallbackQuery", ans);
+            return;
+        }
+
         if (!isChatAdmin(fromId)) {
             // Check if it's a 2FA callback or "me" action
             if (!data.startsWith("approve:") && !data.startsWith("deny:") && !data.startsWith("bl:") && !data.startsWith("me:")) {
@@ -2153,34 +2569,12 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             UUID uuid = pending.uuid;
             String ip = pending.ip;
 
-            // Security check: Only admins or the linked user can approve/deny/blacklist
             if (!isChatAdmin(fromId) && !linkedChats.getOrDefault(uuid, -1L).equals(fromId)) {
                 return;
             }
 
-            String name = Bukkit.getOfflinePlayer(uuid).getName();
-
-            if (action.equals("approve")) {
-                pendingApprovals.remove(approvalId);
-                String pMode = player2faModes.get(uuid);
-                String effMode = (pMode != null) ? pMode : (Bukkit.getOfflinePlayer(uuid).isOp() ? op2faMode : nonOp2faMode);
-                long expiry;
-                if (effMode.equalsIgnoreCase("whitelist")) {
-                    expiry = Long.MAX_VALUE;
-                } else if (effMode.equalsIgnoreCase("always")) {
-                    expiry = System.currentTimeMillis() + 60000; // 1 minute to allow login
-                } else {
-                    expiry = System.currentTimeMillis() + expiryMs;
-                }
-                approvedIps.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>()).put(ip, expiry);
-                sendTelegramMessage(chatId, getMsg("ss-approved").replace("%ip%", escapeHtml(ip)).replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
-            } else if (action.equals("deny")) {
-                sendTelegramMessage(chatId, getMsg("ss-denied").replace("%ip%", escapeHtml(ip)));
-            } else if (action.equals("bl")) {
-                pendingApprovals.remove(approvalId);
-                blacklistedIps.computeIfAbsent(uuid, k -> ConcurrentHashMap.newKeySet()).add(ip);
-                sendTelegramMessage(chatId, getMsg("ss-blacklisted").replace("%ip%", escapeHtml(ip)).replace("%player%", name != null ? escapeHtml(name) : "Unknown"));
-            }
+            String msg = resolve2FA(action, approvalId);
+            if (msg != null) sendTelegramMessage(chatId, msg);
         } else if (action.equals("player")) {
             if (parts.length < 3) return;
             String subAction = parts[1];
@@ -2472,13 +2866,80 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     }
 
     private void sendTelegramMessage(long chatId, String text, @Nullable JsonObject replyMarkup) {
+        sendTelegramMessage(chatId, text, replyMarkup, null);
+    }
+
+    private void sendTelegramMessage(long chatId, String text, @Nullable JsonObject replyMarkup, @Nullable Integer threadId) {
         JsonObject json = new JsonObject();
         json.addProperty("chat_id", chatId);
         json.addProperty("text", text);
+        if (threadId != null && threadId != 0) {
+            json.addProperty("message_thread_id", threadId);
+        }
         if (replyMarkup != null) {
             json.add("reply_markup", replyMarkup);
         }
         executeTelegramRequest("sendMessage", json);
+    }
+
+    public JsonObject executeTelegramRequestSync(String method, JsonObject payload) {
+        if (!isTelegramActive() || !isRunning) return null;
+        if (method.equals("sendMessage") || method.equals("editMessageText")) {
+            payload.addProperty("parse_mode", "HTML");
+        }
+        String url = "https://api.telegram.org/bot" + botToken + "/" + method;
+        String json = payload.toString();
+        try {
+            SimpleHttpResponse response = executePost(url, json, 10);
+            if (response.statusCode == 200) {
+                return gson.fromJson(response.body, JsonObject.class);
+            }
+        } catch (Exception e) {
+            getLogger().severe("Telegram API exception (" + method + "): " + redactToken(e.getMessage()));
+        }
+        return null;
+    }
+
+    public void sendTelegramReply(long chatId, long replyToMessageId, String text) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("chat_id", chatId);
+        payload.addProperty("text", text);
+        payload.addProperty("reply_to_message_id", replyToMessageId);
+        executeTelegramRequest("sendMessage", payload);
+    }
+
+    public void sendTicketToTelegram(String ticketId, String creatorName, String type, String message) {
+        long chatId = getConfig().getLong("ticket-telegram-chat-id", 0L);
+        if (chatId == 0L) return;
+        long topicId = getConfig().getLong("ticket-telegram-topic-id", 0L);
+
+        String text = "<b>New " + escapeHtml(type) + "</b> [ID: <code>" + escapeHtml(ticketId) + "</code>]\n" +
+                     "<b>From:</b> " + escapeHtml(creatorName) + "\n" +
+                     "<b>Message:</b> " + escapeHtml(message);
+
+        JsonObject markup = new JsonObject();
+        JsonArray keyboard = new JsonArray();
+        JsonArray row = new JsonArray();
+        row.add(createButton("✔ Claim", "ticket_claim:" + ticketId));
+        row.add(createButton("✖ Close", "ticket_close:" + ticketId));
+        keyboard.add(row);
+        markup.add("inline_keyboard", keyboard);
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("chat_id", chatId);
+        payload.addProperty("text", text);
+        if (topicId != 0L) {
+            payload.addProperty("message_thread_id", topicId);
+        }
+        payload.add("reply_markup", markup);
+
+        httpExecutor.execute(() -> {
+            JsonObject response = executeTelegramRequestSync("sendMessage", payload);
+            if (response != null && response.has("result") && response.getAsJsonObject("result").has("message_id")) {
+                long messageId = response.getAsJsonObject("result").get("message_id").getAsLong();
+                ticketManager.registerTelegramMessage(ticketId, messageId, chatId);
+            }
+        });
     }
 
     private void editTelegramMessage(long chatId, int messageId, String text, JsonObject replyMarkup) {
@@ -2535,17 +2996,17 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         sendTelegramMessage(chatId, text, markup);
     }
 
-    private void executeTelegramRequest(String method, JsonObject body) {
-        if (!isRunning) return;
+    private void executeTelegramRequest(String method, JsonObject payload) {
+        if (!isTelegramActive() || !isRunning) return;
         if (method.equals("sendMessage") || method.equals("editMessageText")) {
-            body.addProperty("parse_mode", "HTML");
+            payload.addProperty("parse_mode", "HTML");
         }
         String url = "https://api.telegram.org/bot" + botToken + "/" + method;
-        String payload = body.toString();
+        String json = payload.toString();
 
         httpExecutor.execute(() -> {
             try {
-                SimpleHttpResponse response = executePost(url, payload, 10);
+                SimpleHttpResponse response = executePost(url, json, 10);
                 if (response.statusCode != 200) {
                     String respBody = response.body;
                     if (respBody.contains("query is already answered") || respBody.contains("message is not modified")) {
@@ -2567,11 +3028,15 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         return button;
     }
 
-    private synchronized void saveData() {
+    public synchronized void saveData() {
         JsonObject data = new JsonObject();
         JsonObject linked = new JsonObject();
         linkedChats.forEach((uuid, chatId) -> linked.addProperty(uuid.toString(), chatId));
         data.add("linkedChats", linked);
+
+        JsonObject linkedDc = new JsonObject();
+        linkedDiscordChats.forEach((uuid, userId) -> linkedDc.addProperty(uuid.toString(), userId));
+        data.add("linkedDiscordChats", linkedDc);
 
         JsonObject approved = new JsonObject();
         approvedIps.forEach((uuid, ips) -> {
@@ -2600,6 +3065,11 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         JsonObject pModes = new JsonObject();
         player2faModes.forEach((uuid, mode) -> pModes.addProperty(uuid.toString(), mode));
         data.add("player2faModes", pModes);
+
+        if (ticketManager != null) {
+            JsonElement ticketsJson = gson.toJsonTree(ticketManager.getTickets());
+            data.add("tickets", ticketsJson);
+        }
 
         try {
             String json = gson.toJson(data);
@@ -2643,6 +3113,11 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                     linkedChats.put(UUID.fromString(entry.getKey()), entry.getValue().getAsLong());
                 });
             }
+            if (data.has("linkedDiscordChats")) {
+                data.getAsJsonObject("linkedDiscordChats").entrySet().forEach(entry -> {
+                    linkedDiscordChats.put(UUID.fromString(entry.getKey()), entry.getValue().getAsLong());
+                });
+            }
             if (data.has("approvedIps")) {
                 data.getAsJsonObject("approvedIps").entrySet().forEach(entry -> {
                     UUID uuid = UUID.fromString(entry.getKey());
@@ -2672,6 +3147,11 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                     player2faModes.put(UUID.fromString(entry.getKey()), entry.getValue().getAsString());
                 });
             }
+            if (data.has("tickets") && ticketManager != null) {
+                java.lang.reflect.Type type = new com.google.gson.reflect.TypeToken<Map<String, TicketManager.Ticket>>(){}.getType();
+                Map<String, TicketManager.Ticket> loadedTickets = gson.fromJson(data.get("tickets"), type);
+                ticketManager.setTickets(loadedTickets);
+            }
             if (fromLegacy) {
                 saveData();
                 try {
@@ -2681,6 +3161,138 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         } catch (Exception e) {
             getLogger().severe("Could not load data: " + e.getMessage() + ". If encryption is enabled, confirm syncshield_data.key is present.");
         }
+    }
+
+    public String resolve2FA(String action, String approvalId) {
+        PendingApproval pending = action.equals("deny") ? pendingApprovals.remove(approvalId) : pendingApprovals.get(approvalId);
+        if (pending == null) return null;
+
+        UUID uuid = pending.uuid;
+        String ip = pending.ip;
+        String name = Bukkit.getOfflinePlayer(uuid).getName();
+        if (name == null) name = "Unknown";
+
+        if (action.equals("approve")) {
+            pendingApprovals.remove(approvalId);
+            String pMode = player2faModes.get(uuid);
+            String effMode = (pMode != null) ? pMode : (Bukkit.getOfflinePlayer(uuid).isOp() ? op2faMode : nonOp2faMode);
+            long expiry;
+            if (effMode.equalsIgnoreCase("whitelist")) {
+                expiry = Long.MAX_VALUE;
+            } else if (effMode.equalsIgnoreCase("always")) {
+                expiry = System.currentTimeMillis() + 60000;
+            } else {
+                expiry = System.currentTimeMillis() + expiryMs;
+            }
+            approvedIps.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>()).put(ip, expiry);
+            return getMsg("ss-approved").replace("%ip%", escapeHtml(ip)).replace("%player%", escapeHtml(name));
+        } else if (action.equals("deny")) {
+            return getMsg("ss-denied").replace("%ip%", escapeHtml(ip));
+        } else if (action.equals("bl")) {
+            pendingApprovals.remove(approvalId);
+            blacklistedIps.computeIfAbsent(uuid, k -> ConcurrentHashMap.newKeySet()).add(ip);
+            return getMsg("ss-blacklisted").replace("%ip%", escapeHtml(ip)).replace("%player%", escapeHtml(name));
+        }
+        return null;
+    }
+
+    public void handleOpAccountLinking(UUID uuid, long userId, boolean isDiscord) {
+        if (!Bukkit.getOfflinePlayer(uuid).isOp()) return;
+        String playerName = Bukkit.getOfflinePlayer(uuid).getName();
+        if (playerName == null) playerName = uuid.toString();
+
+        boolean configChanged = false;
+
+        if (ownerId == 0) {
+            ownerId = userId;
+            getConfig().set("owner-id", ownerId);
+            configChanged = true;
+            getLogger().info("[SyncShield] Automatically assigned " + (isDiscord ? "Discord" : "Telegram") + " User ID " + userId + " as owner-id (First Linked OP: " + playerName + ").");
+        }
+
+        if (isDiscord) {
+            List<Long> dcAdmins = new ArrayList<>(getConfig().getLongList("discord-admin-ids"));
+            if (!dcAdmins.contains(userId)) {
+                dcAdmins.add(userId);
+                getConfig().set("discord-admin-ids", dcAdmins);
+                configChanged = true;
+                getLogger().info("[SyncShield] Automatically added Discord User ID " + userId + " to discord-admin-ids (Linked OP: " + playerName + ").");
+            }
+        } else {
+            List<Long> tgAdmins = new ArrayList<>(this.adminIds);
+            if (!tgAdmins.contains(userId)) {
+                tgAdmins.add(userId);
+                this.adminIds.add(userId);
+                getConfig().set("admin-ids", tgAdmins);
+                configChanged = true;
+                getLogger().info("[SyncShield] Automatically added Telegram User ID " + userId + " to admin-ids (Linked OP: " + playerName + ").");
+            }
+        }
+
+        if (configChanged) {
+            saveConfig();
+        }
+    }
+
+    public String attemptDiscordLink(String code, long discordUserId) {
+        if (code == null) return null;
+        PendingLink link = consumePendingLink(code);
+        if (link != null) {
+            UUID uuid = link.uuid;
+            linkedDiscordChats.put(uuid, discordUserId);
+            handleOpAccountLinking(uuid, discordUserId, true);
+            saveData();
+            String name = Bukkit.getOfflinePlayer(uuid).getName();
+            return name != null ? name : "Unknown";
+        }
+        return null;
+    }
+
+    public boolean isTelegramEnabled() { return telegramEnabled; }
+    public boolean isTelegramActive() {
+        return telegramEnabled && botToken != null && !botToken.isEmpty() && !botToken.equalsIgnoreCase("YOUR_BOT_TOKEN_HERE");
+    }
+    public boolean isDiscordActive() {
+        return discordBot != null && discordBot.isEnabled();
+    }
+
+    public boolean isDiscordAdmin(long discordUserId) {
+        if (ownerId != 0 && discordUserId == ownerId) return true;
+        if (getConfig().getLongList("discord-admin-roles").contains(discordUserId)) return true;
+        if (getConfig().getLongList("discord-admin-ids").contains(discordUserId)) return true;
+        for (Map.Entry<UUID, Long> entry : linkedDiscordChats.entrySet()) {
+            if (entry.getValue() == discordUserId) {
+                if (Bukkit.getOfflinePlayer(entry.getKey()).isOp()) return true;
+            }
+        }
+        return false;
+    }
+    
+    public Map<String, PendingApproval> getPendingApprovals() {
+        return pendingApprovals;
+    }
+    
+    public Map<UUID, Long> getLinkedDiscordChats() {
+        return linkedDiscordChats;
+    }
+
+    public DiscordBot getDiscordBot() { return discordBot; }
+    public TicketManager getTicketManager() { return ticketManager; }
+    
+    public void notifyAdminsTicket(String text) {
+        long topicId = getConfig().getLong("ticket-telegram-topic-id", 0L);
+        long chatId = getConfig().getLong("ticket-telegram-chat-id", 0L);
+        if (chatId != 0) {
+            if (topicId != 0) {
+                sendTelegramMessage(chatId, text, (int)topicId);
+            } else {
+                sendTelegramMessage(chatId, text);
+            }
+        }
+    }
+
+    public static String formatColors(String text) {
+        return ChatColor.translateAlternateColorCodes('&', text);
     }
 
     private static final class RconFeedbackSession {

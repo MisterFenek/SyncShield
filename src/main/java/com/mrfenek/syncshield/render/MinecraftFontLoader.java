@@ -14,21 +14,25 @@ public final class MinecraftFontLoader {
     private MinecraftFontLoader() {}
 
     private static void loadMinecraftFont() {
-        try (InputStream fontStream = MinecraftFontLoader.class.getResourceAsStream("/bg/Minecraftia-Regular.ttf")) {
+        try (InputStream fontStream = MinecraftFontLoader.class.getResourceAsStream("/bg/Monocraft.ttf")) {
             if (fontStream != null) {
                 Font font = Font.createFont(Font.TRUETYPE_FONT, fontStream);
-                GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(font);
+                try {
+                    GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(font);
+                } catch (Throwable ignored) {}
                 minecraftFont = font;
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
             minecraftFont = null;
         }
     }
 
     public static Font getFont(float size) {
-        if (minecraftFont != null) {
-            return minecraftFont.deriveFont(size);
-        }
-        return new Font("SansSerif", Font.BOLD, Math.round(size));
+        try {
+            if (minecraftFont != null) {
+                return minecraftFont.deriveFont(size);
+            }
+        } catch (Throwable ignored) {}
+        return new Font(Font.SANS_SERIF, Font.BOLD, Math.round(size));
     }
 }
