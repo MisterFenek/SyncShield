@@ -215,9 +215,6 @@ discord-ticket-channel: 0
 
 WIP - Work in progress  
 ❌ - Not implemented  
-✅ - Done  
-
-</details>- Not implemented  
-✅ - Done  
+✅ - Done   
 
 </details>
