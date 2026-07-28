@@ -9,18 +9,20 @@ SyncShield adds 2FA verification to Minecraft logins via Telegram and/or Discord
 - **Compact 6-Character Codes**: Instant account linking with 6-character codes (`A3F9X2`) via `/mclink <code>`, `/start <code>`, or direct chat.  
 - **Case-Insensitive Entry**: Linking accepts codes in both uppercase and lowercase (`a3f9x2` / `A3F9X2`).  
 - **Unified Auto-Owner & Admin Assignment**: Linking the first OP account automatically assigns `owner-id` and populates `admin-ids` / `discord-admin-ids`.  
-- **Automatic Config Migration**: Includes `config-version: 2` with automatic, safe migration from v1 configurations (`config_v1_backup.yml`).  
-- **Monocraft Font & RU/EN Localization**: High-definition pixel rendering using `Monocraft.ttf` with automatic Russian translations for enchantments (`Острота`, `Прочность`, `Починка`), lore descriptions, durability, and book pages.  
-- **Cross-Platform Ticket & Report System**: In-game `/ticket` and `/report` commands with Telegram & Discord interactive buttons (`Claim` / `Close`), targeted thread replies, `/ticket chat <msg>`, and `/ticket close`.  
-- **Console RCON Access**: Telegram and Discord `/rcon <command>` with role-based permissions and allowlisted commands.  
+- **Automatic Config Migration**: Includes `config-version` with automatic, safe migration from older configurations (`config_*_backup.yml`).  
+- **Monocraft Font & RU/EN Localization**: High-definition pixel rendering using `Monocraft.ttf` with automatic Russian translations for enchantments, lore descriptions, durability, and book pages.  
+- **Full customization** - Every message is customizable with `English` and `Russian` locales out-of-the-box.  
+- **Cross-Platform Ticket & Report System**: In-game `/ticket` and `/report` commands with Telegram & Discord interactive buttons (`Claim` / `Close`), targeted thread replies, `/ticket chat <msg>`, and `/ticket close` in-game.  
+- **Console RCON Access**: Telegram and Discord `/rcon <command>` with Role / ID based permissions and allowlisted commands.  
 - **3D Image Rendering**: Renders `[inv]`, `[item]`, `[ender]`, written books, and advancements into high-quality PNG images delivered to Telegram and Discord.  
 
 **Quick Setup**  
-1. Put `syncshield-1.4.0.jar` into your server's `plugins/` folder and start the server once.  
+1. Put `syncshield-*.jar` into your server's `plugins/` folder and start the server once.  
 2. Edit `config.yml` with your Telegram `bot-token` and/or Discord `discord-bot-token`.  
+3. Edit `config.yml` `telegram-enabled` & `discord-enabled` values.
 3. Run `/syncshield reload` or restart the server.  
 4. In-game, run `/syncshield link` to generate your 6-character link code.  
-5. Send your code to the Telegram or Discord bot to link your account and receive admin access.  
+5. Send your code (`/mclink` or just text message) to the Telegram or Discord bot to link your account and receive admin access.  
 
 <details>
 <summary>Commands</summary>
@@ -40,7 +42,7 @@ SyncShield adds 2FA verification to Minecraft logins via Telegram and/or Discord
   Sets a configuration value directly from in-game console or chat. Requires `syncshield.admin`.
 
 - `/syncshield debug rebake-textures`  
-  Forces a fresh bake of 3D block and item textures. Requires `syncshield.debug`.
+  Forces a fresh bake of 3D block and item textures, use only when encountering rendering errors or updating to a newer Minecraft version. Requires `syncshield.debug`.
 
 - `/ticket <message>`  
   Opens a support ticket with administrators. Syncs to Telegram and Discord.
@@ -203,18 +205,21 @@ discord-ticket-channel: 0
 
 | Status | Feature | Key Task |
 | :---: | :--- | :--- |
-| ❌ (Planned for 1.7/1.8) | **Multi-Loader Support** | Support Quilt, Fabric, Forge, and NeoForge |
 | ✅ | **Ticket/report system** | Implement a ticket/report system in Minecraft, Telegram & Discord |
 | ✅ | **Legacy Support** | Port logic to older Minecraft versions |
 | ✅ | **Telegram RCON Feedback** | Add command feedback to Telegram RCON |
 | ✅ | **Chat Sync (Telegram)** | Integrate Telegram <-> Minecraft chat |
 | ✅ | **Discord 2FA** | Add Discord login approval functions |
-| ❌ (Planned for 1.6/1.7) | **App Authentication** | Support Google Auth, Authy, etc. |
 | ✅ | **Chat Sync (Discord)** | Integrate Discord <-> Minecraft chat |
 | ✅ | **Discord RCON** | Integrate Discord RCON functionality |
+| ❌ (Planned for 1.6) | **App Authentication** | Support Google Auth, Authy, etc. |
+| ❌ (Planned for 1.7/1.8) | **Multi-Loader Support** | Support Quilt, Fabric, Forge, and NeoForge |
+| ❌ (Planned for 1.8/1.9) | **AI functionality** | AI chat moderation, ticket / report handling, etc. |
+| WIP | **Discord management** | Unify Discord & Telegram account management options |
+| WIP | **Discord per-channel tickets** | Add automatic creation of a new channel / thread for each ticket |
+| WIP | **Telegram per-topic tickets** | Add automatic creation of a new topic for each ticket (supergroups only) |
 
 WIP - Work in progress  
 ❌ - Not implemented  
-✅ - Done   
-
+✅ - Done  
 </details>
