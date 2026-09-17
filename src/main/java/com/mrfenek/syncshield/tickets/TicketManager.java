@@ -129,10 +129,12 @@ public class TicketManager {
         if (t != null && t.status.equals("Open")) {
             t.status = "Claimed";
             t.claimedBy = claimer;
-            Player p = Bukkit.getPlayer(t.creator);
-            if (p != null) {
-                p.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.getMsg("ticket-claimed").replace("%id%", id).replace("%admin%", claimer)));
-            }
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player p = Bukkit.getPlayer(t.creator);
+                if (p != null) {
+                    p.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.getMsg("ticket-claimed").replace("%id%", id).replace("%admin%", claimer)));
+                }
+            });
             plugin.notifyAdminsTicket("Ticket [" + id + "] claimed by " + claimer);
             plugin.saveData();
         }

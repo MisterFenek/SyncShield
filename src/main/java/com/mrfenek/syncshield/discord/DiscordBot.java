@@ -126,14 +126,16 @@ public class DiscordBot extends ListenerAdapter {
                     if (ticket.status.equals("Open")) {
                         plugin.getTicketManager().claimTicket(ticket.id, adminName);
                     }
-                    Player p = Bukkit.getPlayer(ticket.creator);
-                    if (p != null && p.isOnline()) {
-                        String replyFmt = plugin.getMsg("ticket-admin-reply-format")
-                                .replace("%id%", ticket.id)
-                                .replace("%admin%", adminName)
-                                .replace("%message%", text);
-                        p.sendMessage(org.bukkit.ChatColor.translateAlternateColorCodes('&', replyFmt));
-                    }
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        Player p = Bukkit.getPlayer(ticket.creator);
+                        if (p != null && p.isOnline()) {
+                            String replyFmt = plugin.getMsg("ticket-admin-reply-format")
+                                    .replace("%id%", ticket.id)
+                                    .replace("%admin%", adminName)
+                                    .replace("%message%", text);
+                            p.sendMessage(org.bukkit.ChatColor.translateAlternateColorCodes('&', replyFmt));
+                        }
+                    });
                     event.getMessage().reply("✔ Reply sent to **" + ticket.creatorName + "** in Minecraft!").queue();
                 }
                 return;
