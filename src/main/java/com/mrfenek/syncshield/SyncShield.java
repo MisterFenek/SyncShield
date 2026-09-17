@@ -575,19 +575,21 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         // Fill missing keys from jar resource
         InputStream defConfigStream = getResource("messages_" + lang + ".yml");
         if (defConfigStream != null) {
-            YamlConfiguration defConfig = YamlConfiguration.loadConfiguration(new InputStreamReader(defConfigStream, StandardCharsets.UTF_8));
-            boolean changed = false;
-            for (String key : defConfig.getKeys(true)) {
-                if (!messagesConfig.contains(key)) {
-                    messagesConfig.set(key, defConfig.get(key));
-                    changed = true;
+            try (InputStreamReader reader = new InputStreamReader(defConfigStream, StandardCharsets.UTF_8)) {
+                YamlConfiguration defConfig = YamlConfiguration.loadConfiguration(reader);
+                boolean changed = false;
+                for (String key : defConfig.getKeys(true)) {
+                    if (!messagesConfig.contains(key)) {
+                        messagesConfig.set(key, defConfig.get(key));
+                        changed = true;
+                    }
                 }
-            }
-            if (changed) {
-                try {
-                    messagesConfig.save(messagesFile);
-                } catch (IOException ignored) {}
-            }
+                if (changed) {
+                    try {
+                        messagesConfig.save(messagesFile);
+                    } catch (IOException ignored) {}
+                }
+            } catch (IOException ignored) {}
         }
         ItemRenderer.setLanguage(messagesConfig.getString("language-internal", "en"), getMsg("ss-render-durability"));
     }
@@ -2225,6 +2227,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     private void handleMeManage(long chatId, UUID uuid, @Nullable Integer messageId) {
         String name = Bukkit.getOfflinePlayer(uuid).getName();
+        if (name == null) name = uuid.toString();
         JsonObject markup = new JsonObject();
         JsonArray keyboard = new JsonArray();
 
@@ -2261,6 +2264,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     private void handle2FASettings(long chatId, UUID uuid, @Nullable Integer messageId, String prefix) {
         String name = Bukkit.getOfflinePlayer(uuid).getName();
+        if (name == null) name = uuid.toString();
         String currentMode = player2faModes.get(uuid);
         if (currentMode == null) {
             currentMode = Bukkit.getOfflinePlayer(uuid).isOp() ? op2faMode : nonOp2faMode;
@@ -2402,6 +2406,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     private void handlePlayerIpManagement(long chatId, UUID uuid, boolean isBlacklist, @Nullable Integer messageId) {
         String name = Bukkit.getOfflinePlayer(uuid).getName();
+        if (name == null) name = uuid.toString();
         JsonObject markup = new JsonObject();
         JsonArray keyboard = new JsonArray();
 
