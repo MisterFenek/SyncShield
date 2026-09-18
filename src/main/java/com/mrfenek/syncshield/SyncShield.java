@@ -1584,14 +1584,16 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                                             if (ticket.status.equals("Open")) {
                                                 ticketManager.claimTicket(ticket.id, adminName);
                                             }
-                                            Player p = Bukkit.getPlayer(ticket.creator);
-                                            if (p != null && p.isOnline()) {
-                                                String replyFmt = getMsg("ticket-admin-reply-format")
-                                                        .replace("%id%", ticket.id)
-                                                        .replace("%admin%", adminName)
-                                                        .replace("%message%", rawText);
-                                                p.sendMessage(ChatColor.translateAlternateColorCodes('&', replyFmt));
-                                            }
+                                            Bukkit.getScheduler().runTask(this, () -> {
+                                                Player p = Bukkit.getPlayer(ticket.creator);
+                                                if (p != null && p.isOnline()) {
+                                                    String replyFmt = getMsg("ticket-admin-reply-format")
+                                                            .replace("%id%", ticket.id)
+                                                            .replace("%admin%", adminName)
+                                                            .replace("%message%", rawText);
+                                                    p.sendMessage(ChatColor.translateAlternateColorCodes('&', replyFmt));
+                                                }
+                                            });
                                             sendTelegramMessage(chatId, getMsg("ss-ticket-reply-sent").replace("%player%", escapeHtml(ticket.creatorName)), topicThreadId);
                                         }
                                         continue;
@@ -2579,8 +2581,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             if (parts.length < 3) return;
             String subAction = parts[1];
             UUID uuid = UUID.fromString(parts[2]);
-            org.bukkit.entity.Player target = Bukkit.getPlayer(uuid);
-            String name = (target != null) ? target.getName() : Bukkit.getOfflinePlayer(uuid).getName();
+            String name = Bukkit.getOfflinePlayer(uuid).getName();
 
             if (subAction.equals("manage")) {
                 JsonObject markup = new JsonObject();
@@ -2605,21 +2606,30 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 sendTelegramMessage(chatId, getMsg("ss-manage-player").replace("%player%", name != null ? escapeHtml(name) : uuid.toString()), markup);
             } else if (subAction.equals("kick")) {
                 Bukkit.getScheduler().runTask(this, () -> {
+                    org.bukkit.entity.Player target = Bukkit.getPlayer(uuid);
                     if (target != null && target.isOnline()) {
                         kickPlayer(target, getMsg("mc-kick-reason"), ChatColor.RED);
-                        sendTelegramMessage(chatId, getMsg("ss-kicked").replace("%player%", escapeHtml(target.getName())));
+                        String tName = target.getName();
+                        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                            sendTelegramMessage(chatId, getMsg("ss-kicked").replace("%player%", escapeHtml(tName)));
+                        });
                     } else {
-                        sendTelegramMessage(chatId, getMsg("ss-not-online"));
+                        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                            sendTelegramMessage(chatId, getMsg("ss-not-online"));
+                        });
                     }
                 });
             } else if (subAction.equals("ban")) {
                 Bukkit.getScheduler().runTask(this, () -> {
                     String finalName = (name != null) ? name : uuid.toString();
                     Bukkit.getBanList(org.bukkit.BanList.Type.NAME).addBan(finalName, getMsg("mc-ban-reason"), null, null);
+                    org.bukkit.entity.Player target = Bukkit.getPlayer(uuid);
                     if (target != null && target.isOnline()) {
                         kickPlayer(target, getMsg("mc-ban-reason"), ChatColor.RED);
                     }
-                    sendTelegramMessage(chatId, getMsg("ss-banned").replace("%player%", escapeHtml(finalName)));
+                    Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                        sendTelegramMessage(chatId, getMsg("ss-banned").replace("%player%", escapeHtml(finalName)));
+                    });
                 });
             } else if (subAction.equals("msg")) {
                 chatStates.put(chatId, "msg_to:" + uuid);
@@ -2769,17 +2779,22 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 UUID uuid = UUID.fromString(parts[2]);
                 if (!linked.contains(uuid)) return;
                 
-                org.bukkit.entity.Player target = Bukkit.getPlayer(uuid);
-                if (target != null && target.isOnline()) {
-                    String ip = target.getAddress().getAddress().getHostAddress();
-                    blacklistedIps.computeIfAbsent(uuid, k -> ConcurrentHashMap.newKeySet()).add(ip);
-                    Bukkit.getScheduler().runTask(this, () -> {
+                Bukkit.getScheduler().runTask(this, () -> {
+                    org.bukkit.entity.Player target = Bukkit.getPlayer(uuid);
+                    if (target != null && target.isOnline()) {
+                        String ip = target.getAddress().getAddress().getHostAddress();
+                        blacklistedIps.computeIfAbsent(uuid, k -> ConcurrentHashMap.newKeySet()).add(ip);
                         kickPlayer(target, getMsg("kick-blacklisted"), ChatColor.RED);
-                    });
-                    sendTelegramMessage(chatId, getMsg("ss-blacklisted-self").replace("%ip%", escapeHtml(ip)).replace("%player%", escapeHtml(target.getName())));
-                } else {
-                    sendTelegramMessage(chatId, getMsg("ss-not-online"));
-                }
+                        String tName = target.getName();
+                        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                            sendTelegramMessage(chatId, getMsg("ss-blacklisted-self").replace("%ip%", escapeHtml(ip)).replace("%player%", escapeHtml(tName)));
+                        });
+                    } else {
+                        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                            sendTelegramMessage(chatId, getMsg("ss-not-online"));
+                        });
+                    }
+                });
             } else if (subAction.equals("bl_l")) {
                 if (parts.length < 3) return;
                 UUID uuid = UUID.fromString(parts[2]);
