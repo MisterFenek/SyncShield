@@ -1,5 +1,5 @@
 name: "SyncShield"
-version: '1.4.0'
+version: '1.4.1'
 main: com.mrfenek.syncshield.SyncShield
 api-version: '1.16'
 prefix: SyncShield
@@ -9,6 +9,12 @@ description: SyncShield — 2FA and Telegram chat sync plugin with secure login 
 permissions:
   syncshield.use:
     description: Allow use of /syncshield link
+    default: true
+  syncshield.ticket:
+    description: Allow opening tickets via /ticket
+    default: true
+  syncshield.report:
+    description: Allow reporting players via /report
     default: true
   syncshield.admin:
     description: Allow use of /syncshield reload and /syncshield config

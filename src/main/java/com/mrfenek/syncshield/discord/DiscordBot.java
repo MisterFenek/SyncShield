@@ -1,9 +1,10 @@
 package com.mrfenek.syncshield.discord;
 
 import com.mrfenek.syncshield.SyncShield;
+import com.mrfenek.syncshield.tickets.TicketManager;
+import com.mrfenek.syncshield.util.TextSanitizer;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
@@ -13,15 +14,19 @@ import net.dv8tion.jda.api.interactions.components.buttons.Button;
 import net.dv8tion.jda.api.utils.FileUpload;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class DiscordBot extends ListenerAdapter {
     private final SyncShield plugin;
     private JDA jda;
-    private long syncChannelId;
-    private long ticketChannelId;
-    private List<Long> adminRoles;
-    private boolean enabled;
+    private volatile long syncChannelId;
+    private volatile long ticketChannelId;
+    private volatile List<Long> adminRoles = new CopyOnWriteArrayList<>();
+    private volatile List<Long> adminIds = new CopyOnWriteArrayList<>();
+    private volatile boolean rconEnabled = true;
+    private final boolean enabled;
 
     public DiscordBot(SyncShield plugin) {
         this.plugin = plugin;
@@ -34,9 +39,7 @@ public class DiscordBot extends ListenerAdapter {
             return;
         }
 
-        this.syncChannelId = plugin.getConfig().getLong("discord-chat-sync-channel", 0L);
-        this.ticketChannelId = plugin.getConfig().getLong("discord-ticket-channel", 0L);
-        this.adminRoles = plugin.getConfig().getLongList("discord-admin-roles");
+        applyConfigValues();
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
@@ -50,6 +53,25 @@ public class DiscordBot extends ListenerAdapter {
                 plugin.getLogger().severe("Failed to initialize Discord Bot: " + e.getMessage());
             }
         });
+    }
+
+    private void applyConfigValues() {
+        this.syncChannelId = plugin.getConfig().getLong("discord-chat-sync-channel", 0L);
+        this.ticketChannelId = plugin.getConfig().getLong("discord-ticket-channel", 0L);
+        this.adminRoles = new CopyOnWriteArrayList<>(plugin.getConfig().getLongList("discord-admin-roles"));
+        this.adminIds = new CopyOnWriteArrayList<>(plugin.getConfig().getLongList("discord-admin-ids"));
+        this.rconEnabled = plugin.getConfig().getBoolean("discord-rcon-enabled", true);
+    }
+
+    /** Re-reads Discord channel/admin/rcon settings after /syncshield reload. */
+    public void refreshConfig() {
+        applyConfigValues();
+        plugin.getLogger().info("Discord bot configuration refreshed (channels, admins, RCON flag).");
+    }
+
+    /** True when a Discord token is configured, even if JDA is still connecting. */
+    public boolean isConfigured() {
+        return enabled;
     }
 
     public boolean isEnabled() {
@@ -80,19 +102,19 @@ public class DiscordBot extends ListenerAdapter {
     public void sendTicketToDiscord(String ticketId, String creatorName, String type, String message) {
         if (jda == null || ticketChannelId == 0) return;
         TextChannel channel = jda.getTextChannelById(ticketChannelId);
-        if (channel != null) {
-            String content = "**New " + type + "** [ID: " + ticketId + "]\n" +
-                             "**From:** " + creatorName + "\n" +
-                             "**Message:** " + message;
-            
-            channel.sendMessage(content)
-                   .addActionRow(
-                       Button.success("ticket_claim_" + ticketId, "Claim"),
-                       Button.danger("ticket_close_" + ticketId, "Close")
-                   ).queue(sentMsg -> {
-                       plugin.getTicketManager().registerDiscordMessage(ticketId, sentMsg.getIdLong(), channel.getIdLong());
-                   });
-        }
+        if (channel == null) return;
+
+        String content = "**New " + TextSanitizer.sanitizeDiscord(type) + "** [ID: " + ticketId + "]\n"
+                + "**From:** " + TextSanitizer.sanitizeDiscord(creatorName) + "\n"
+                + "**Message:** " + TextSanitizer.sanitizeDiscord(message);
+
+        channel.sendMessage(content)
+                .addActionRow(
+                        Button.success("ticket_claim_" + ticketId, "Claim"),
+                        Button.danger("ticket_close_" + ticketId, "Close")
+                ).queue(sentMsg -> {
+                    plugin.getTicketManager().registerDiscordMessage(ticketId, sentMsg.getIdLong(), channel.getIdLong());
+                });
     }
 
     public void sendDiscordReply(long channelId, long messageId, String text) {
@@ -107,6 +129,26 @@ public class DiscordBot extends ListenerAdapter {
         }
     }
 
+    private boolean isAdminMember(MessageReceivedEvent event) {
+        if (plugin.isDiscordAdmin(event.getAuthor().getIdLong())) return true;
+        if (event.getMember() != null) {
+            for (var role : event.getMember().getRoles()) {
+                if (adminRoles.contains(role.getIdLong())) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isAdminUser(ButtonInteractionEvent event) {
+        if (plugin.isDiscordAdmin(event.getUser().getIdLong())) return true;
+        if (event.getMember() != null) {
+            for (var role : event.getMember().getRoles()) {
+                if (adminRoles.contains(role.getIdLong())) return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
         if (event.getAuthor().isBot()) return;
@@ -114,10 +156,14 @@ public class DiscordBot extends ListenerAdapter {
         // Check for admin replies to ticket notifications
         if (event.getMessage().getReferencedMessage() != null) {
             long refId = event.getMessage().getReferencedMessage().getIdLong();
-            com.mrfenek.syncshield.tickets.TicketManager.Ticket ticket = plugin.getTicketManager().getTicketByDiscordMessage(refId);
+            TicketManager.Ticket ticket = plugin.getTicketManager().getTicketByDiscordMessage(refId);
             if (ticket != null) {
+                if (!isAdminMember(event)) {
+                    event.getMessage().reply("Only server admins may reply to ticket notifications.").queue();
+                    return;
+                }
                 String adminName = event.getAuthor().getName();
-                String text = event.getMessage().getContentDisplay().trim();
+                String text = TextSanitizer.sanitizeDiscord(event.getMessage().getContentDisplay()).trim();
 
                 if (text.equalsIgnoreCase("/close") || text.equalsIgnoreCase("close") || text.equalsIgnoreCase("/ticket close")) {
                     plugin.getTicketManager().closeTicket(ticket.id, adminName);
@@ -145,61 +191,81 @@ public class DiscordBot extends ListenerAdapter {
             if (plugin.getConfig().getBoolean("discord-chat-sync-from-dc", true)) {
                 String msg = event.getMessage().getContentDisplay();
                 String playerName = event.getAuthor().getName();
-                
-                // Sync to MC
+
+                // Sync to MC (formatting/pings stripped before broadcast)
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     String formatted = plugin.getMsg("discord-sync-mc-format")
-                            .replace("%player%", playerName)
-                            .replace("%message%", msg);
+                            .replace("%player%", TextSanitizer.stripFormatting(playerName))
+                            .replace("%message%", TextSanitizer.stripFormatting(msg));
                     Bukkit.broadcastMessage(SyncShield.formatColors(formatted));
                 });
             }
         }
 
-        // Direct link code logic (e.g., A3F9X2 or /mclink A3F9X2)
+        // Command handling. /mclink and /rcon work anywhere the bot can read;
+        // bare 6-character link codes are only accepted in DMs so that random
+        // short messages in shared channels are never consumed as link codes.
         String content = event.getMessage().getContentRaw().trim();
-        if (content.startsWith("/mclink") || (!content.startsWith("/") && content.length() == 6)) {
-            String code = content.startsWith("/mclink") ? content.substring(7).trim() : content;
-            if (!code.isEmpty()) {
-                long authorId = event.getAuthor().getIdLong();
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    String mcName = plugin.attemptDiscordLink(code, authorId);
-                    if (mcName != null) {
-                        event.getChannel().sendMessage("✔ Successfully linked your Discord account to Minecraft player: **" + mcName + "**").queue();
-                    } else if (content.startsWith("/mclink")) {
-                        event.getChannel().sendMessage("✖ Invalid or expired link code.").queue();
-                    }
-                });
-                if (content.startsWith("/mclink")) return;
-            }
-        }
-
-        // RCON logic (requires explicit /rcon <cmd>)
         if (content.startsWith("/rcon ")) {
-            if (!plugin.getConfig().getBoolean("discord-rcon-enabled", true)) {
-                event.getChannel().sendMessage("RCON access is disabled for Discord in config.yml.").queue();
-                return;
-            }
-            boolean isAdmin = plugin.isDiscordAdmin(event.getAuthor().getIdLong()) ||
-                             (event.getMember() != null && event.getMember().getRoles().stream().anyMatch(r -> adminRoles.contains(r.getIdLong())));
-            
-            if (!isAdmin) {
-                event.getChannel().sendMessage("You do not have permission to use RCON.").queue();
-                return;
-            }
-
-            String cmd = content.substring(6).trim();
-            if (cmd.isEmpty()) return;
-
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                DiscordCommandSender sender = new DiscordCommandSender();
-                Bukkit.dispatchCommand(sender, cmd);
-                String output = sender.getOutput();
-                if (output.isEmpty()) output = "Command executed with no output.";
-                if (output.length() > 1900) output = output.substring(0, 1900) + "...";
-                event.getChannel().sendMessage("```\n" + output + "\n```").queue();
-            });
+            handleRcon(event, content.substring("/rcon ".length()).trim());
+            return;
         }
+        if (content.startsWith("/mclink")) {
+            handleLinkAttempt(event, content.substring("/mclink".length()).trim(), true);
+            return;
+        }
+        boolean isPrivate = !event.isFromGuild() && event.getChannel().getIdLong() != syncChannelId;
+        if (isPrivate && !content.startsWith("/") && content.length() == 6) {
+            handleLinkAttempt(event, content, false);
+        }
+    }
+
+    private void handleLinkAttempt(MessageReceivedEvent event, String code, boolean explicitCommand) {
+        if (code.isEmpty()) {
+            if (explicitCommand) {
+                event.getChannel().sendMessage("Usage: `/mclink <code>`").queue();
+            }
+            return;
+        }
+        long authorId = event.getAuthor().getIdLong();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String mcName = plugin.attemptDiscordLink(code, authorId);
+            if (mcName != null) {
+                event.getChannel().sendMessage("✔ Successfully linked your Discord account to Minecraft player: **"
+                        + TextSanitizer.sanitizeDiscord(mcName) + "**").queue();
+            } else if (explicitCommand) {
+                event.getChannel().sendMessage("✖ Invalid or expired link code.").queue();
+            }
+        });
+    }
+
+    // RCON logic (requires explicit /rcon <cmd>)
+    private void handleRcon(MessageReceivedEvent event, String cmd) {
+        if (!rconEnabled) {
+            event.getChannel().sendMessage("RCON access is disabled for Discord in config.yml.").queue();
+            return;
+        }
+        if (!isAdminMember(event)) {
+            event.getChannel().sendMessage("You do not have permission to use RCON.").queue();
+            return;
+        }
+
+        String baseCmd = TextSanitizer.baseCommand(cmd);
+        if (!plugin.isRconCommandAllowed(baseCmd)) {
+            event.getChannel().sendMessage("Command `" + baseCmd + "` is not on the RCON allowlist"
+                    + " (`rcon-allowed-commands` in config.yml; use * to allow all).").queue();
+            return;
+        }
+        if (cmd.isEmpty()) return;
+
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            DiscordCommandSender sender = new DiscordCommandSender();
+            Bukkit.dispatchCommand(sender, cmd);
+            String output = sender.getOutput();
+            if (output.isEmpty()) output = "Command executed with no output.";
+            if (output.length() > 1900) output = output.substring(0, 1900) + "...";
+            event.getChannel().sendMessage("```\n" + output + "\n```").queue();
+        });
     }
 
     public void send2faRequest(long discordUserId, String message, String approvalId) {
@@ -219,44 +285,46 @@ public class DiscordBot extends ListenerAdapter {
     @Override
     public void onButtonInteraction(ButtonInteractionEvent event) {
         String componentId = event.getComponentId();
-        if (componentId.startsWith("ticket_claim_")) {
-            String ticketId = componentId.substring("ticket_claim_".length());
+        if (componentId.startsWith("ticket_claim_") || componentId.startsWith("ticket_close_")) {
+            // Admin-only: ticket buttons execute moderation actions.
+            if (!isAdminUser(event)) {
+                event.reply("Only server admins may manage tickets.").setEphemeral(true).queue();
+                return;
+            }
+            boolean isClaim = componentId.startsWith("ticket_claim_");
+            String ticketId = componentId.substring((isClaim ? "ticket_claim_" : "ticket_close_").length());
             String admin = event.getUser().getName();
             Bukkit.getScheduler().runTask(plugin, () -> {
-                plugin.getTicketManager().claimTicket(ticketId, admin);
+                if (isClaim) {
+                    plugin.getTicketManager().claimTicket(ticketId, admin);
+                } else {
+                    plugin.getTicketManager().closeTicket(ticketId, admin);
+                }
             });
-            event.reply("You claimed ticket " + ticketId).setEphemeral(true).queue();
-            event.getMessage().editMessage(event.getMessage().getContentRaw() + "\n\n*Claimed by " + admin + "*").setComponents().queue();
-        } else if (componentId.startsWith("ticket_close_")) {
-            String ticketId = componentId.substring("ticket_close_".length());
-            String admin = event.getUser().getName();
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                plugin.getTicketManager().closeTicket(ticketId, admin);
-            });
-            event.reply("You closed ticket " + ticketId).setEphemeral(true).queue();
-            event.getMessage().editMessage(event.getMessage().getContentRaw() + "\n\n*Closed by " + admin + "*").setComponents().queue();
+            event.reply((isClaim ? "Claiming" : "Closing") + " ticket " + ticketId + "...").setEphemeral(true).queue();
+            event.getMessage().editMessage(event.getMessage().getContentRaw()
+                    + (isClaim ? "\n\n*Claimed by " : "\n\n*Closed by ") + TextSanitizer.sanitizeDiscord(admin) + "*").setComponents().queue();
         } else if (componentId.startsWith("2fa_")) {
             String[] parts = componentId.split("_");
             if (parts.length < 3) return;
             String action = parts[1]; // approve, deny, bl
             String approvalId = parts[2];
             long fromDiscordId = event.getUser().getIdLong();
-            
-            boolean isAdmin = plugin.isDiscordAdmin(fromDiscordId);
+
             SyncShield.PendingApproval pending = plugin.getPendingApprovals().get(approvalId);
-            
+
             if (pending == null) {
                 event.reply("This 2FA request has expired or was already resolved.").setEphemeral(true).queue();
                 return;
             }
-            
+
             boolean isLinkedUser = plugin.getLinkedDiscordChats().getOrDefault(pending.uuid, -1L) == fromDiscordId;
-            
-            if (!isAdmin && !isLinkedUser) {
+
+            if (!isAdminUser(event) && !isLinkedUser) {
                 event.reply("You don't have permission to resolve this request.").setEphemeral(true).queue();
                 return;
             }
-            
+
             event.deferReply().queue();
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 String responseMsg = plugin.resolve2FA(action, approvalId);

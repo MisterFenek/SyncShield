@@ -150,6 +150,9 @@ admin-ids: []
 private-only: true
 rcon-enabled: true
 
+# Commands allowed via /rcon (empty = deny all, "*" = allow all)
+rcon-allowed-commands: []
+
 # Telegram <-> Minecraft Chat Sync
 chat-sync-enabled: false
 chat-sync-chat-ids: []

@@ -83,6 +83,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class SyncShield extends JavaPlugin implements Listener, CommandExecutor, org.bukkit.command.TabCompleter {
 
     private String botToken;
+    private boolean discordEnabled = false;
     private boolean telegramEnabled = true;
     private long expiryMs = 12 * 60 * 60 * 1000L;
     private String op2faMode = "session";
@@ -203,7 +204,10 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
         this.ticketManager = new TicketManager(this);
         this.discordBot = new DiscordBot(this);
-        
+        if (!discordEnabled) {
+            this.discordBot = null;
+        }
+
         TicketCommand tc = new TicketCommand(this);
         org.bukkit.command.PluginCommand ticketCmd = getCommand("ticket");
         if (ticketCmd != null) ticketCmd.setExecutor(tc);
@@ -267,9 +271,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private void checkAndMigrateConfig() {
         int configVersion = getConfig().getInt("config-version", 1);
         if (configVersion > 2) {
-            getConfig().set("config-version", 2);
-            saveConfig();
-            ensureConfigHeader();
+            getLogger().warning("config-version " + configVersion + " is newer than this plugin supports (2). Leaving config untouched to avoid data loss.");
             return;
         }
         if (configVersion == 2) {
@@ -314,6 +316,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         if (!getConfig().contains("discord-chat-sync-render-books")) getConfig().set("discord-chat-sync-render-books", true);
         if (!getConfig().contains("discord-chat-sync-render-advancements")) getConfig().set("discord-chat-sync-render-advancements", true);
         if (!getConfig().contains("discord-ticket-channel")) getConfig().set("discord-ticket-channel", 0L);
+        if (!getConfig().contains("rcon-allowed-commands")) getConfig().set("rcon-allowed-commands", new ArrayList<String>());
 
         saveConfig();
         ensureConfigHeader();
@@ -358,6 +361,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         this.discordChatSyncRenderItems = getConfig().getBoolean("discord-chat-sync-render-items", true);
         this.discordChatSyncRenderBooks = getConfig().getBoolean("discord-chat-sync-render-books", true);
         this.discordChatSyncRenderAdvancements = getConfig().getBoolean("discord-chat-sync-render-advancements", true);
+        this.discordEnabled = getConfig().getBoolean("discord-enabled", false);
         this.rconAllowedCommands.clear();
         getConfig().getStringList("rcon-allowed-commands").forEach(cmd -> rconAllowedCommands.add(cmd.toLowerCase(Locale.ROOT).trim()));
         this.bakeBlockItemsOnStartup = getConfig().getBoolean("bake-block-items-on-startup", true);
@@ -376,6 +380,9 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
 
         loadMessages();
+        if (discordBot != null && discordBot.isEnabled()) {
+            discordBot.refreshConfig();
+        }
         this.chatSyncTelegramFormat = messagesConfig.getString("chat-sync-telegram-format", "<b>%player%</b>: %message%");
         this.chatSyncMcFormat = messagesConfig.getString("chat-sync-mc-format", "&7[TG] &f%player%: %message%");
         this.chatSyncAdvancementFormat = messagesConfig.getString("chat-sync-advancement-format", "<i>%player%</i> has made the advancement <b>%advancement%</b> (%description%)");
@@ -415,7 +422,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                 int minor = Integer.parseInt(parts[1]);
                 return minor >= 16;
             }
-            return true;
+            return false; // e.g. "1.9" style versions below 1.16
         } catch (Exception ignored) {
             return true;
         }
@@ -953,6 +960,17 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         return text.replaceAll("bot[0-9A-Za-z:_-]+", "bot<redacted>");
     }
 
+    /**
+     * RCON allowlist semantics: an empty list denies everything (secure default).
+     * "*" allows every non-sensitive command. Sensitive auth commands are always refused.
+     */
+    public boolean isRconCommandAllowed(String baseCmd) {
+        if (baseCmd == null) return false;
+        if (com.mrfenek.syncshield.util.TextSanitizer.isSensitiveCommand(baseCmd)) return false;
+        if (rconAllowedCommands.contains("*")) return true;
+        return rconAllowedCommands.contains(baseCmd.toLowerCase(Locale.ROOT));
+    }
+
     @Override
     public void onDisable() {
         isRunning = false;
@@ -964,9 +982,6 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         closeDatabase();
         if (rootLogger != null) {
             rootLogger.removeHandler(rconLogHandler);
-        }
-        if (renderExecutor != null) {
-            renderExecutor.shutdownNow();
         }
         scheduler.shutdown();
         httpExecutor.shutdownNow();
@@ -988,7 +1003,8 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
-        String ip = player.getAddress().getAddress().getHostAddress();
+        String ip = player.getAddress() != null && player.getAddress().getAddress() != null
+                ? player.getAddress().getAddress().getHostAddress() : "unknown";
 
         String pMode = player2faModes.get(uuid);
         String effMode = (pMode != null) ? pMode : (player.isOp() ? op2faMode : nonOp2faMode);
@@ -1025,9 +1041,14 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
     @EventHandler
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
-        if (event.getPlayer().isOp()) {
-            notifyAdmins("commands", getMsg("ss-admin-cmd").replace("%player%", escapeHtml(event.getPlayer().getName())).replace("%command%", escapeHtml(event.getMessage())));
+        if (!event.getPlayer().isOp()) return;
+        String baseCmd = com.mrfenek.syncshield.util.TextSanitizer.baseCommand(event.getMessage());
+        if (com.mrfenek.syncshield.util.TextSanitizer.isSensitiveCommand(baseCmd)) {
+            debug("Suppressed OP command notification (sensitive command) for " + event.getPlayer().getName());
+            return;
         }
+        String commandLine = com.mrfenek.syncshield.util.TextSanitizer.truncate(event.getMessage(), 200);
+        notifyAdmins("commands", getMsg("ss-admin-cmd").replace("%player%", escapeHtml(event.getPlayer().getName())).replace("%command%", escapeHtml(commandLine)));
     }
 
     @EventHandler
@@ -1191,63 +1212,25 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
         
         if (discordBot != null && linkedDiscordChats.containsKey(uuid)) {
-            discordBot.send2faRequest(linkedDiscordChats.get(uuid), tgMsg, approvalId);
+            long dcChat = linkedDiscordChats.get(uuid);
+            if (discordBot.isEnabled()) {
+                discordBot.send2faRequest(dcChat, tgMsg, approvalId);
+            } else if (discordBot.isConfigured()) {
+                // JDA may still be connecting shortly after startup: retry shortly.
+                org.bukkit.Bukkit.getScheduler().runTaskLater(this, () -> {
+                    if (discordBot.isEnabled() && pendingApprovals.containsKey(approvalId)) {
+                        discordBot.send2faRequest(dcChat, tgMsg, approvalId);
+                    }
+                }, 100L);
+            }
         }
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         String cmdName = command.getName().toLowerCase(Locale.ROOT);
-        if (cmdName.equals("ticket")) {
-            if (!(sender instanceof org.bukkit.entity.Player)) {
-                sender.sendMessage(getMsg("mc-player-only"));
-                return true;
-            }
-            org.bukkit.entity.Player player = (org.bukkit.entity.Player) sender;
-            if (args.length == 0) {
-                player.sendMessage(getMsg("ticket-usage"));
-                return true;
-            }
-            String first = args[0].toLowerCase(Locale.ROOT);
-            if (first.equals("chat")) {
-                if (args.length < 2) {
-                    player.sendMessage(getMsg("ticket-chat-usage"));
-                    return true;
-                }
-                String msg = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
-                ticketManager.handlePlayerChat(player, msg);
-                return true;
-            }
-            if (first.equals("close")) {
-                TicketManager.Ticket active = ticketManager.getActiveTicketByPlayer(player.getUniqueId());
-                if (active != null) {
-                    ticketManager.closeTicket(active.id, player.getName());
-                } else {
-                    player.sendMessage(getMsg("ticket-no-active"));
-                }
-                return true;
-            }
-            String msg = String.join(" ", args);
-            ticketManager.createTicket(player, "Ticket", msg);
-            return true;
-        }
-
-        if (cmdName.equals("report")) {
-            if (!(sender instanceof org.bukkit.entity.Player)) {
-                sender.sendMessage(getMsg("mc-player-only"));
-                return true;
-            }
-            org.bukkit.entity.Player player = (org.bukkit.entity.Player) sender;
-            if (args.length < 2) {
-                player.sendMessage(getMsg("report-usage"));
-                return true;
-            }
-            String target = args[0];
-            String reason = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
-            ticketManager.createTicket(player, "Report", "Report against " + target + ": " + reason);
-            return true;
-        }
-
+        // /ticket and /report are handled exclusively by TicketCommand; anything else
+        // that reaches this executor is the /syncshield command itself.
         if (!cmdName.equals("syncshield")) return false;
 
         if (args.length == 0) {
@@ -1339,6 +1322,13 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
 
             String path = args[1];
             String value = String.join(" ", Arrays.copyOfRange(args, 2, args.length));
+
+            // Never allow secrets to be written via the in-game config command.
+            String loweredPath = path.toLowerCase(Locale.ROOT);
+            if (loweredPath.contains("token") || loweredPath.contains("password")) {
+                sender.sendMessage(colorizeOrDefault("&cRefusing to write secret values (" + escapeHtml(path) + ") via /syncshield config. Edit config.yml on disk instead.", ChatColor.RED));
+                return true;
+            }
 
             try {
                 if (path.equalsIgnoreCase("debug")) {
@@ -1514,6 +1504,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         pendingApprovals.entrySet().removeIf(entry -> now - entry.getValue().timestamp > 5 * 60 * 1000L);
         ipManagerShortIdsTimestamp.entrySet().removeIf(entry -> now - entry.getValue() > 60 * 60 * 1000L);
         ipManagerShortIds.keySet().removeIf(shortId -> !ipManagerShortIdsTimestamp.containsKey(shortId));
+        renderCooldowns.values().removeIf(last -> now - last > 60 * 60 * 1000L);
         debug("Cleaned up expired 2FA sessions and pending states.");
     }
 
@@ -1674,7 +1665,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
                         }
                     }
                 } else {
-                    getLogger().severe("Error polling Telegram updates: API returned " + response.statusCode + " - " + response.body + ". Check network access and bot-token validity.");
+                    getLogger().severe("Error polling Telegram updates: API returned " + response.statusCode + " - " + redactToken(response.body) + ". Check network access and bot-token validity.");
                     checkTokenError(response.statusCode);
                     try { Thread.sleep(5000); } catch (InterruptedException ignored) {}
                 }
@@ -1774,7 +1765,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         if (renderInvAllowed && lower.contains("[inv]")) {
             if (enqueueRender(player.getUniqueId(), () -> {
                 String[] beforeAfter = userMessageBeforeAfter(message, "[inv]");
-                byte[] image = new InventoryRenderer().renderInventory(player.getInventory());
+                byte[] image = new InventoryRenderer().renderInventory(copyOf(player.getInventory()));
                 String caption = formatCaption(playerName, beforeAfter[0], "Inventory", beforeAfter[1], true);
                 sendChatSyncPhoto(image, caption, "inventory");
             })) return;
@@ -1785,7 +1776,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         if (renderEnderAllowed && lower.contains("[ender]")) {
             if (enqueueRender(player.getUniqueId(), () -> {
                 String[] beforeAfter = userMessageBeforeAfter(message, "[ender]");
-                byte[] image = new EnderChestRenderer().renderEnderChest(player.getEnderChest());
+                byte[] image = new EnderChestRenderer().renderEnderChest(copyOf(player.getEnderChest()));
                 String caption = formatCaption(playerName, beforeAfter[0], "Ender Chest", beforeAfter[1], true);
                 sendChatSyncPhoto(image, caption, "ender");
             })) return;
@@ -1903,10 +1894,12 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     private void sendChatSyncToMinecraft(String text, String username, JsonObject chatObj) {
         if (!chatSyncFromTg) return;
         String chatTitle = chatObj != null && chatObj.has("title") ? chatObj.get("title").getAsString() : null;
+        String cleanText = com.mrfenek.syncshield.util.TextSanitizer.stripFormatting(text);
+        String cleanUsername = com.mrfenek.syncshield.util.TextSanitizer.stripFormatting(username);
         String formatted = chatSyncMcFormat
-                .replace("%player%", username)
-                .replace("%message%", text)
-                .replace("%chat%", chatTitle != null ? chatTitle : "Telegram");
+                .replace("%player%", cleanUsername)
+                .replace("%message%", cleanText)
+                .replace("%chat%", chatTitle != null ? com.mrfenek.syncshield.util.TextSanitizer.stripFormatting(chatTitle) : "Telegram");
         String colored = colorize(formatted);
         Bukkit.getScheduler().runTask(this, () -> Bukkit.broadcastMessage(colored));
     }
@@ -1965,6 +1958,21 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         String before = idx >= 0 ? message.substring(0, idx) : message;
         String after = idx >= 0 ? message.substring(idx + tag.length()) : "";
         return new String[]{escapeHtml(before), escapeHtml(after)};
+    }
+
+    /**
+     * Takes a thread-safe snapshot of an inventory on the caller's thread so async
+     * render tasks never touch live (non-thread-safe) Bukkit inventory state.
+     */
+    private Inventory copyOf(Inventory source) {
+        if (source == null) return Bukkit.createInventory(null, 27);
+        ItemStack[] contents = source.getContents();
+        Inventory copy = Bukkit.createInventory(null, Math.max(9, contents.length));
+        for (int i = 0; i < contents.length && i < copy.getSize(); i++) {
+            ItemStack stack = contents[i];
+            copy.setItem(i, stack == null ? null : stack.clone());
+        }
+        return copy;
     }
 
     private boolean enqueueRender(UUID playerId, Runnable task) {
@@ -2186,7 +2194,7 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
         }
 
         String baseCmd = command.split("\\s+")[0].toLowerCase(Locale.ROOT);
-        if (!rconAllowedCommands.contains(baseCmd)) {
+        if (!isRconCommandAllowed(baseCmd)) {
             sendTelegramMessage(chatId, getMsg("ss-unauthorized"));
             return;
         }
@@ -3264,6 +3272,9 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     }
 
     public boolean isTelegramEnabled() { return telegramEnabled; }
+    public boolean isTicketSystemEnabled() {
+        return getConfig().getBoolean("ticket-system-enabled", true);
+    }
     public boolean isTelegramActive() {
         return telegramEnabled && botToken != null && !botToken.isEmpty() && !botToken.equalsIgnoreCase("YOUR_BOT_TOKEN_HERE");
     }
@@ -3272,8 +3283,10 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
     }
 
     public boolean isDiscordAdmin(long discordUserId) {
+        if (discordUserId == 0) return false;
         if (ownerId != 0 && discordUserId == ownerId) return true;
-        if (getConfig().getLongList("discord-admin-roles").contains(discordUserId)) return true;
+        // Only user IDs may grant admin; role IDs are checked separately against the
+        // member's actual roles in DiscordBot (never conflated with user IDs here).
         if (getConfig().getLongList("discord-admin-ids").contains(discordUserId)) return true;
         for (Map.Entry<UUID, Long> entry : linkedDiscordChats.entrySet()) {
             if (entry.getValue() == discordUserId) {

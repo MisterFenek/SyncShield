@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'com.mrfenek'
-version = '1.4.0'
+version = '1.4.1'
 description = "mrf's 2FA & Chat sync"
 
 repositories {
@@ -82,16 +82,22 @@ tasks.test {
     useJUnitPlatform()
 }
 
-tasks.register('copyPluginJar', Copy) {
-    from shadowJar
-    into "C:/Users/Admin/AppData/Local/JetBrains/IntelliJIdea2025.3/com.nickawrist.MinecraftDevServer/Test Server/plugins"
-    rename { String fileName ->
-        return "${project.name}-${project.version}.jar"
+// Optional developer convenience: pass -PpluginDeployDir="C:/path/to/server/plugins"
+// to copy the built jar into a local test server. Disabled by default so builds
+// succeed on any machine/CI.
+def pluginDeployDir = project.findProperty('pluginDeployDir')
+if (pluginDeployDir) {
+    tasks.register('copyPluginJar', Copy) {
+        from shadowJar
+        into pluginDeployDir
+        rename { String fileName ->
+            return "${project.name}-${project.version}.jar"
+        }
+        // Destination contains mutable runtime cache; disable state tracking to avoid MD5 lookups on it.
+        doNotTrackState("Plugin destination contains runtime-generated cache files (block_items).")
     }
-    // Destination contains mutable runtime cache; disable state tracking to avoid MD5 lookups on it.
-    doNotTrackState("Plugin destination contains runtime-generated cache files (block_items).")
+    build.finalizedBy(copyPluginJar)
+    shadowJar.finalizedBy(copyPluginJar)
 }
 
 build.dependsOn(shadowJar)
-build.finalizedBy(copyPluginJar)
-shadowJar.finalizedBy(copyPluginJar)

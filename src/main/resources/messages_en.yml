@@ -45,7 +45,7 @@ mc-link-code: "Your link code is: %code%. Send it to the Telegram or Discord bot
 mc-already-linked: "Your account is already linked."
 
 # Message sent to the player when a message is received from admin.
-mc-msg-format: "[Console -> You] %message%"
+mc-msg-format: "[Ticket/Admin] %message%"
 
 # Error for non-player command execution.
 mc-player-only: "This command can only be used by players!"
@@ -96,7 +96,7 @@ ss-2fa-mode-updated: "✔ 2FA mode for %player% has been updated to %mode%"
 ss-settings-menu: "Notification Settings:"
 ss-enabled: "✔"
 ss-disabled: "✖"
-ss-start: "Hello! Your Chat ID is: <code>%chatId%</code>\n\n<b>How to link your account:</b>\n1. Join the Minecraft server.\n2. If you are not linked, you will see a 10-character code in the kick message.\n3. Send this code to the bot here (e.g., <code>/mclink ABCDEFGHIJ</code> or just <code>ABCDEFGHIJ</code>).\n\n<b>Bot Commands:</b>\n/start - Show this help message and main menu\n/mclink &lt;code&gt; - Link your Minecraft account\n\n<b>Admin Commands (if authorized):</b>\n/players - List and manage online players\n/settings - Configure bot notification settings\n/rcon &lt;cmd&gt; - Execute a server console command (or just /&lt;cmd&gt;)\n/cancel - Cancel current interaction state"
+ss-start: "Hello! Your Chat ID is: <code>%chatId%</code>\n\n<b>How to link your account:</b>\n1. Join the Minecraft server.\n2. If you are not linked, you will see a 6-character code in the kick message.\n3. Send this code to the bot here (e.g., <code>/mclink A3F9X2</code> or just <code>A3F9X2</code>).\n\n<b>Bot Commands:</b>\n/start - Show this help message and main menu\n/mclink &lt;code&gt; - Link your Minecraft account\n\n<b>Admin Commands (if authorized):</b>\n/players - List and manage online players\n/settings - Configure bot notification settings\n/rcon &lt;cmd&gt; - Execute a server console command (or just /&lt;cmd&gt;)\n/cancel - Cancel current interaction state"
 ss-me-menu: "Managing account: %player%"
 ss-blacklisted-self: "✔ Your current IP (%ip%) has been blacklisted for account %player%."
 ss-no-linked-accounts: "You have no linked accounts."
@@ -134,6 +134,8 @@ ticket-chat-usage: "&cUsage: /ticket chat <message>"
 ticket-admin-reply-format: "&e[Ticket #%id% Admin] &f%admin%: %message%"
 ticket-player-chat-format: "&a[Ticket #%id%] &fYou: %message%"
 ticket-no-active: "&cYou do not have an active ticket. Create one using /ticket <message>"
+ticket-disabled: "&cThe ticket & report system is currently disabled."
+ticket-cooldown: "&cPlease wait before opening another ticket."
 ss-ticket-closed-tg: "✔ Ticket #%id% has been closed by %admin%"
 ss-ticket-reply-sent: "✔ Reply sent to %player% in-game"
 
