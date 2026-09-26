@@ -402,6 +402,15 @@ public final class SyncShield extends JavaPlugin implements Listener, CommandExe
             String base = version.split("-")[0];
             String[] parts = base.split("\\.");
             if (parts.length < 2) return false;
+            int major;
+            try {
+                major = Integer.parseInt(parts[0]);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            // 26.x (year-based) and 2.x+ servers always use modern materials;
+            // only 1.X below 1.16 needs the legacy material fallback.
+            if (major != 1) return false;
             int minor = Integer.parseInt(parts[1]);
             return minor < 16;
         } catch (Exception ignored) {

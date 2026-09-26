@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'com.mrfenek'
-version = '1.4.1'
+version = '1.4.2'
 description = "mrf's 2FA & Chat sync"
 
 repositories {
@@ -21,14 +21,14 @@ repositories {
 }
 
 dependencies {
-    compileOnly("org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT")
+    compileOnly("org.spigotmc:spigot-api:26.3-R0.1-SNAPSHOT")
     compileOnly("org.jetbrains:annotations:24.0.0")
     implementation("org.xerial:sqlite-jdbc:3.46.0.0")
     implementation("net.dv8tion:JDA:5.0.0-beta.21") {
         exclude module: 'opus-java'
     }
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testImplementation("org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT")
+    testImplementation("org.spigotmc:spigot-api:26.3-R0.1-SNAPSHOT")
     testImplementation("org.mockito:mockito-core:4.11.0")
     testImplementation("org.mockito:mockito-inline:4.11.0")
 }
@@ -38,7 +38,7 @@ tasks {
         // Configure the Minecraft version for our task.
         // This is the only required configuration besides applying the plugin.
         // Your plugin's jar (or shadowJar if present) will be used automatically.
-        minecraftVersion("1.21")
+        minecraftVersion("26.3")
     }
     shadowJar {
         archiveClassifier.set("")

@@ -1,5 +1,5 @@
 name: "SyncShield"
-version: '1.4.1'
+version: '1.4.2'
 main: com.mrfenek.syncshield.SyncShield
 api-version: '1.16'
 prefix: SyncShield

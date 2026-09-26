@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.2] - Unreleased
+
+### Added
+- **Minecraft 26.X support**: compiled against Spigot API 26.3 (26.1/26.2 also supported); 1.16.X-1.21.X compatibility retained.
+- `runServer` test task now launches Minecraft 26.3.
+
+### Changed
+- Potion texture lookup prefers the modern `PotionMeta#getBasePotionType()` (1.20.5+) with a reflective fallback to the deprecated `getBasePotionData()` on older servers.
+
+### Fixed
+- `isLegacyMaterialServer()` now ignores the minor version on non-1.x servers, so 26.3 no longer incorrectly enables the legacy-material path.
+
 ## [1.4.1] - Unreleased
 
 ### Security
