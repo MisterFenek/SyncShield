@@ -103,7 +103,7 @@ SyncShield adds 2FA verification to Minecraft logins via Telegram and/or Discord
 # =========================================================
 # SyncShield Configuration File
 # ---------------------------------------------------------
-# Supported server versions: 1.16.X - 1.21.X (Paper/Spigot API).
+# Supported server versions: 1.16.X - 1.21.X, 26.X (Paper/Spigot API).
 # =========================================================
 
 # --- DO NOT EDIT (Will probably break something) ---
@@ -210,6 +210,7 @@ discord-ticket-channel: 0
 | :---: | :--- | :--- |
 | ✅ | **Ticket/report system** | Implement a ticket/report system in Minecraft, Telegram & Discord |
 | ✅ | **Legacy Support** | Port logic to older Minecraft versions |
+| ✅ | **Minecraft 26.X support** | Compile against Spigot 26.3 API, keep 1.16+ compatibility |
 | ✅ | **Telegram RCON Feedback** | Add command feedback to Telegram RCON |
 | ✅ | **Chat Sync (Telegram)** | Integrate Telegram <-> Minecraft chat |
 | ✅ | **Discord 2FA** | Add Discord login approval functions |

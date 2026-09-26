@@ -1,7 +1,7 @@
 # =========================================================
 # SyncShield Configuration File
 # ---------------------------------------------------------
-# Supported server versions: 1.16.X - 1.21.X (Paper/Spigot API).
+# Supported server versions: 1.16.X - 1.21.X, 26.X (Paper/Spigot API).
 # =========================================================
 # --- DO NOT EDIT (Will probably break something) ---
 config-version: 2

@@ -8,6 +8,7 @@ import org.bukkit.inventory.meta.LeatherArmorMeta;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -142,11 +143,36 @@ public final class TextureUtils {
     public static BufferedImage loadPotionTexture(ItemStack item) {
         if (!(item.getItemMeta() instanceof PotionMeta)) return null;
         PotionMeta meta = (PotionMeta) item.getItemMeta();
-        String type = meta.getBasePotionData() != null && meta.getBasePotionData().getType() != null
-                ? meta.getBasePotionData().getType().name().toLowerCase(Locale.ROOT)
-                : null;
+        String type = getBasePotionTypeName(meta);
         if (type == null || type.isEmpty()) return null;
         return loadItemTexture("potion__" + type);
+    }
+
+    /**
+     * Resolves the base potion type name for the potion texture lookup, preferring
+     * the modern {@code getBasePotionType()} (1.20.5+) and falling back to the
+     * deprecated {@code getBasePotionData().getType()} on older servers where the
+     * modern method is absent.
+     */
+    private static String getBasePotionTypeName(PotionMeta meta) {
+        try {
+            Method modern = meta.getClass().getMethod("getBasePotionType");
+            Object potionType = modern.invoke(meta);
+            if (potionType != null) return ((Enum<?>) potionType).name().toLowerCase(Locale.ROOT);
+        } catch (NoSuchMethodException ignored) {
+            // Pre-1.20.5 server: fall through to the legacy PotionData path.
+        } catch (Exception ignored) {
+            // Reflection failed for an unexpected reason; try the legacy path below.
+        }
+        try {
+            Object potionData = meta.getClass().getMethod("getBasePotionData").invoke(meta);
+            if (potionData != null) {
+                Object potionType = potionData.getClass().getMethod("getType").invoke(potionData);
+                if (potionType != null) return ((Enum<?>) potionType).name().toLowerCase(Locale.ROOT);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     public static BufferedImage buildPotionTexture(ItemStack item) {
