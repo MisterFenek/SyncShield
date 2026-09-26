@@ -1,6 +1,22 @@
+# Gradle
 .gradle/
 build/
+
+# IDE
 .idea/
 *.iml
+.vscode/
 test-server/
 Monocraft-ttf.zip
+
+# Minecraft server / plugin runtime data
+run/
+server/
+plugins/*/cache/
+plugins/SyncShield/
+*.db
+*.db-journal
+
+# OS
+.DS_Store
+Thumbs.db

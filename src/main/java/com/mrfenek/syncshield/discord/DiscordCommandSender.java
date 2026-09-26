@@ -45,7 +45,7 @@ public class DiscordCommandSender implements ConsoleCommandSender {
     @Override public PermissionAttachment addAttachment(Plugin plugin, int ticks) { return null; }
     @Override public void removeAttachment(PermissionAttachment attachment) {}
     @Override public void recalculatePermissions() {}
-    @Override public Set<PermissionAttachmentInfo> getEffectivePermissions() { return null; }
+    @Override public Set<PermissionAttachmentInfo> getEffectivePermissions() { return java.util.Collections.emptySet(); }
     @Override public boolean isOp() { return true; }
     @Override public void setOp(boolean value) {}
     @Override public void sendMessage(UUID sender, String message) { sendMessage(message); }

@@ -68,6 +68,11 @@ private-only: true
 # Enable RCON access via Telegram for admins
 rcon-enabled: true
 
+# Commands that may be executed via Telegram/Discord /rcon.
+# Empty list = deny everything (secure default). Use "*" to allow all commands.
+# Example: rcon-allowed-commands: ["list", "tps", "say", "*"]
+rcon-allowed-commands: []
+
 # Telegram <-> Minecraft Chat Sync
 chat-sync-enabled: false
 chat-sync-chat-ids: []
